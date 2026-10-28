@@ -1,6 +1,8 @@
 import pygame
 import os
 import asyncio
+import json
+import time
 
 '''
 saturday
@@ -12,6 +14,10 @@ Clock out 23:19
 wednessday
 Clock in 12:40
 Clock out 14:20
+1 hour 10/27/26
+wednessday
+Clock in 8:15
+
 '''
 
 #todo list:
@@ -40,7 +46,7 @@ class main:
             self.count_down = 0
             self.grab_offset = (0, 0)
 
-            self.opens = main.window      # which window class this shortcut opens
+            self.opens = main.window # which window class this shortcut opens
 
         def run(self):
             # if its window is already open, bring it to the front instead of making another
@@ -63,7 +69,7 @@ class main:
                 pygame.draw.rect(self.main.screen, (51, 153, 255), box, 1)
             
             elif self.hovered == True:
-                box = self.get_box()   # a few pixels of padding around icon + label
+                box = self.get_box() # a few pixels of padding around icon + label
                 # semi-transparent fill
                 fill = pygame.Surface(box.size, pygame.SRCALPHA)
                 fill.fill((51, 153, 255, 10))
@@ -198,7 +204,7 @@ class main:
             self.list_width = 160
             self.row_height = 40
             self.selected_mail = None
-            main.notified = False           # opening the app clears the bell
+            main.notified = False # opening the app clears the bell
 
         def get_area(self):
             return pygame.Rect(self.x + 3, self.y + self.title_height,
@@ -294,12 +300,15 @@ class main:
             self.clicker_grow_rate = [10**-4 * i for i in [320,500]] #how much it grows by, prosent of width and height
 
             self.resize()
-
-            self.planet = 0
+            self.load()
+            
             self.messages = False
             self.messager_length = self.width*0.25
+            self.shop_length = self.messager_length
             self.typing = False
             self.message_goal = 10
+            self.auto_save_timer = 0
+            self.auto_save_intervouls = 100
 
         def get_area(self):
             return pygame.Rect(self.x + 3, self.y + self.title_height,
@@ -343,6 +352,12 @@ class main:
                                 self.selected_mail = mail
                                 mail['read'] = True
                                 self.resize()
+                        for mail, rect in self.get_shop_rects():
+                            if rect.collidepoint(event.pos):
+                                if self.planet >= int(mail['price']):
+                                    mail['number'] += 1
+                                    self.planet -= int(mail['price'])
+                                self.resize()
             
             if event.type == pygame.KEYDOWN and self.typing: #will type if unfocused, todo , fix
                 if event.key == pygame.K_BACKSPACE:
@@ -355,6 +370,9 @@ class main:
                     self.typing = False
                 else:
                     self.typing += event.unicode
+            
+            if self.closed:
+                self.save()
 
             return used
 
@@ -408,6 +426,47 @@ class main:
                                        self.messager_length, self.row_height))
                     for i, mail in enumerate(self.main.friend_list)]
 
+        def get_shop_rects(self):
+            area = self.get_area()
+            return [(mail,pygame.Rect(area.right-self.shop_length, area.top + i * self.row_height,
+                                        self.shop_length, self.row_height))
+                    for i, mail in enumerate(self.shop_list)]
+
+        def default_shop(self):
+            return [{'sender': 'clicker', 'number': 0, 'price': '10', 'asset':'Evil-plane.png', 'pps': 1},
+                    {'sender': 'satilite', 'number': 0, 'price': '100', 'asset':'Evil-plane.png', 'pps': 10},
+                    {'sender': 'moon', 'number': 0, 'price': '1000', 'asset':'Evil-plane.png', 'pps': 100},
+                    {'sender': 'plantet', 'number': 0, 'price': '10000', 'asset':'Evil-plane.png', 'pps': 1_000},
+                    {'sender': 'sun', 'number': 0, 'price': '100000', 'asset':'Evil-plane.png', 'pps': 10_000},
+                    {'sender': 'galexies', 'number': 0, 'price': '1000000', 'asset':'Evil-plane.png', 'pps': 100_000},
+                    {'sender': 'universes', 'number': 0, 'price': '10000000', 'asset':'Evil-plane.png', 'pps': 1_000_000}]
+
+        def get_pps(self):
+            return sum(item['number'] * item['pps'] for item in self.shop_list)
+
+        def load(self):
+            self.planet = 0
+            self.shop_list = self.default_shop()
+            try:
+                with open(self.main.save_path) as f:
+                    data = json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError):
+                return # no save yet, or a broken one: start fresh
+
+            self.planet = data.get('planet', 0)
+            owned = data.get('owned', {})
+            for item in self.shop_list:
+                item['number'] = owned.get(item['sender'], 0)
+
+        def save(self):
+            data = {'planet': self.planet,
+                    'message_goal': self.message_goal,
+                    'owned': {item['sender']: item['number'] for item in self.shop_list}}
+            tmp = self.main.save_path + '.tmp'
+            with open(tmp, 'w') as f:
+                json.dump(data, f)
+            os.replace(tmp, self.main.save_path)# a crash mid-write can't corrupt the real file
+
         def get_accsept_button(self):
             area = self.get_area()
             list_rect = pygame.Rect(area.left, area.top, self.messager_length, area.height)
@@ -428,7 +487,14 @@ class main:
 
         def draw_content(self):
 
-            if self.planet == self.message_goal:
+            dt = self.main.clock.get_time() / 1000 # seconds since the last frame
+            self.planet += self.get_pps() * dt
+            self.auto_save_timer += dt
+            if self.auto_save_timer > self.auto_save_intervouls:
+                self.auto_save_timer = 0
+                self.save()
+
+            if self.planet >= self.message_goal:
                 self.message_goal *= 100
                 self.main.Send_message('Friendo','Hiiiiiiiiiii')
 
@@ -437,6 +503,7 @@ class main:
             msg_font =  self.main.smallest_font
             area = self.get_area()
             list_rect = pygame.Rect(area.left, area.top, self.messager_length, area.height)
+            shop_rect = pygame.Rect(area.right-self.shop_length, area.top, self.shop_length, area.height)
 
             if self.clicker_size[0] > self.base_clicker_size[0]*self.width:
                 self.resize_planet([i*self.clicker_shrink_rate for i in self.clicker_size])
@@ -480,7 +547,7 @@ class main:
                         #it will be a list of messages in order,
                         #accepted: [[True, 'this is your message, this is the first message']. [False,'this is their message, this is the second message']]
                         message_bar = self.get_message_bar()
-                        y = area.bottom - 30
+                        y = area.bottom - 6
                         message_content = 'Send a chat'
 
                         pygame.draw.circle(screen, (180, 180, 180), message_bar.midright, message_bar.height/2, width = 3, draw_bottom_right=True, draw_top_right=True)
@@ -527,11 +594,26 @@ class main:
                     y -= 10
                 screen.set_clip(None)
 
+            screen.set_clip(shop_rect)
+            pygame.draw.rect(screen, (245, 245, 245), shop_rect)
+            for mail, rect in self.get_shop_rects():
+                if self.planet >= int(mail['price']):
+                    pygame.draw.rect(screen, (180, 180, 180), rect)
+                    pygame.draw.rect(screen, (100, 200, 100), rect.inflate(0,-1))
+                screen.blit(font.render(f"{mail['sender']}:{mail['number']}", True, (0, 0, 0)), (rect.left + 20, rect.top + 4))
+                screen.blit(font.render(mail['price'], True, (90, 90, 90)), (rect.left + 20, rect.top + 21))
+                icon = self.main.asset_path + mail['asset']
+                icon = pygame.image.load(icon).convert_alpha()
+                icon = pygame.transform.scale(icon, (40,40))
+                screen.blit(icon,(rect.right - 40, rect.top))
+                pygame.draw.line(screen, (180, 180, 180), rect.bottomleft, rect.bottomright)
+            screen.set_clip(None)
+
             screen.blit(self.msg,(area.topleft))
 
             screen.blit(self.clicker_icon,(area.center[0]-self.clicker_size[0]/2,area.center[1]-self.clicker_size[1]/2))
 
-            screen.blit(font.render(str(self.planet), True, (255, 255, 255)),area.midtop)
+            screen.blit(font.render(str(int(self.planet)), True, (255, 255, 255)),area.midtop)
 
     def __init__(self):
         #window sizes
@@ -551,6 +633,10 @@ class main:
 
         self.asset_path = './Nett detective assets/'
         self.asset_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Nett detective assets') + os.sep
+
+        self.save_path = self.asset_path + 'Progress.json'
+        #self.load() #todo, for when load is added to the whole thing 
+
 
         self.bk = self.asset_path + 'windows-xp-desktop.png'
         self.bk = pygame.image.load(self.bk).convert_alpha()
@@ -593,7 +679,7 @@ class main:
         for w in reversed(self.open_windows):
             if w.handle_event(event): #just True or false
                 if event.type == pygame.MOUSEBUTTONDOWN:
-                    self.open_windows.remove(w)      # bring to front
+                    self.open_windows.remove(w) # bring to front
                     self.open_windows.append(w)
                 if w.resizeing: #shocked this part works, self.open_windows realy is both
                     w.resize()
@@ -603,7 +689,7 @@ class main:
             clicked = None
             if self.notified and self.get_bell_rect().collidepoint(event.pos):
                 self.notified = False
-                self.email_shortcut.run()       # opens the app, or brings it to the front
+                self.email_shortcut.run() # opens the app, or brings it to the front
                 return
             for i in self.desktop_shortcuts:
                 if i.get_box().collidepoint(event.pos):
@@ -616,15 +702,15 @@ class main:
             if clicked:
                 clicked.grabbed = True
                 clicked.grab_offset = (event.pos[0] - clicked.x, event.pos[1] - clicked.y)
-                if clicked.count_down > 0:      # second click in time = double click
+                if clicked.count_down > 0: # second click in time = double click
                     clicked.run()
                     clicked.count_down = 0
                 else:
-                    clicked.count_down = 30     # about 0.5 s at 60 FPS
+                    clicked.count_down = 30 # about 0.5 s at 60 FPS
 
         elif event.type == pygame.MOUSEBUTTONUP:
             for i in self.desktop_shortcuts:
-                i.grabbed = False               # release everything, even if the mouse left the box
+                i.grabbed = False # release everything, even if the mouse left the box
 
         elif event.type == pygame.MOUSEMOTION:
             for i in self.desktop_shortcuts:
@@ -647,8 +733,8 @@ class main:
         """A friend sends the player a message. Returns False if they aren't an accepted friend."""
         for friend in self.friend_list:
             if friend['sender'] == sender and friend['accepted']:
-                if friend['accepted'] is True:                 # accepted, but no messages yet
-                    friend['accepted'] = [[False, text]]       # not an empty list: [] counts as "not accepted"
+                if friend['accepted'] is True: # accepted, but no messages yet
+                    friend['accepted'] = [[False, text]] # not an empty list: [] counts as "not accepted"
                 else:
                     friend['accepted'].append([False, text])
 
@@ -658,10 +744,10 @@ class main:
                 if not viewing:
                     friend['read'] = False
 
-                # refresh the bell icon in any open Pixel World window
-                for w in self.open_windows:
-                    if isinstance(w, self.clicker_app):
-                        w.resize()
+                    # refresh the bell icon in any open Pixel World window
+                    for w in self.open_windows:
+                        if isinstance(w, self.clicker_app):
+                            w.resize()
                 return True
         return False
 
@@ -697,6 +783,9 @@ class main:
             self.mouseX, self.mouseY = pygame.mouse.get_pos()
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
+                    for w in self.open_windows:
+                        if hasattr(w, 'save'): #if w has the save function, neat
+                            w.save()
                     self.running = False
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
