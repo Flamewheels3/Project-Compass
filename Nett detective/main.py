@@ -653,7 +653,7 @@ class main:
         mail.y = 50
         self.desktop_shortcuts.append(mail)
 
-        #self.Push_notification('Welcome', 'Hi! This is a test email.\n\nIf you can read this, the email app works.', 'Admin')
+        self.Push_notification('Welcome', 'Hi! This is a test email.\n\nIf you can read this, the email app works.', 'Admin')
         self.Friend_request('Friendo')
 
         while self.running:
