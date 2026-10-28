@@ -1,5 +1,6 @@
 import pygame
 import os
+import asyncio
 
 '''
 saturday
@@ -289,7 +290,7 @@ class main:
 
             self.resize_planet([75,75])
             self.base_clicker_size = [0.15,0.234375]
-            self.clicker_shrink_rate = 0.99 #how much prosent it goes down by, so it will be % of the size of the old one
+            self.clicker_shrink_rate = 0.90 #how much prosent it goes down by, so it will be % of the size of the old one
             self.clicker_max_size = [0.4,0.625] #how much prosent of the width and height
             self.clicker_grow_rate = [10**-4 * i for i in [320,500]] #how much it grows by, prosent of width and height
 
@@ -636,7 +637,7 @@ class main:
         self.inbox.insert(0, {'sender': sender, 'subject': subject, 'body': body, 'read': False})
         self.notified = True
 
-    def Start_Game(self):
+    async def Start_Game(self):
         mail = self.shortcut(self)
         mail.set_icon('Evil-plane.png')
         mail.set_name('E-post')
@@ -652,7 +653,7 @@ class main:
         mail.y = 50
         self.desktop_shortcuts.append(mail)
 
-        self.Push_notification('Welcome', 'Hi! This is a test email.\n\nIf you can read this, the email app works.', 'Admin')
+        #self.Push_notification('Welcome', 'Hi! This is a test email.\n\nIf you can read this, the email app works.', 'Admin')
         self.Friend_request('Friendo')
 
         while self.running:
@@ -683,9 +684,10 @@ class main:
 
             pygame.display.update()
             self.clock.tick(self.FPS)
+            await asyncio.sleep(0)
             
         pygame.quit()
 
 if __name__ == '__main__':
     EscaperoomGame = main()
-    EscaperoomGame.Start_Game()
+    asyncio.run(EscaperoomGame.Start_Game())

@@ -1,2 +1,0 @@
-pip install pyinstaller
-pyinstaller --onefile --windowed --add-data "Nett detective assets;Nett detective assets" "Nett detective.py"
