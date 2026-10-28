@@ -490,12 +490,27 @@ class main:
                             y += 8
 
                         y = message_bar.top - 30
+                        
                         if type(self.selected_mail['accepted']) == list:
-                            for sent_by_user, message in reversed(self.selected_mail['accepted']):
+                            for sent_by_user, message in reversed(self.selected_mail['accepted']): #so it does the second, then the first
+                                message_box = None
+                                content = []
                                 if sent_by_user:
+                                    y2 = y
                                     for line in self.wrap(message, message_bar.width*0.85):
-                                        screen.blit(msg_font.render(line, True, (130,130,130)),(self.get_message_bar().centerx,y)) #todo, is on the left side, want it on the right side
+                                        #.get_rect(topleft = (list_rect.left + 10 + self.messager_length/2, area.bottom - 20))
+                                        content.append(msg_font.render(line, True, (80,80,80)))
+                                        box = content[-1].get_rect(topleft = (self.get_message_bar().centerx,y))
+                                        if message_box:
+                                            message_box.union(box)
+                                        else:
+                                            message_box = box
                                         y += 8
+                                    message_box = message_box.inflate(6, 6)
+                                    pygame.draw.ellipse(screen,(100,200,100),message_box)
+                                    for i in content:
+                                        screen.blit(i,(message_box.left+3,y2)) #todo, is on the left side, want it on the right side
+                                        y2 += 8
                                 else:
                                     pass
 
