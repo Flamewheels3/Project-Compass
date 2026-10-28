@@ -18,10 +18,9 @@ Clock out 14:20
 #make the resizing direction based, grab the side, resize the side
 #make the resizing work on both sides
 #make the cursor change when you hover over the side
-#pixel world (clicker game with a messanger)
 #scroll bar to the email if it's resized too wrong
 #rezise the text so that it fits
-#makes it so that the notification is gone, not when it's open, but when all mails are marcked as read
+#makes it so that the notification is gone, not when it's open, but when all mails are marked as read
 
 import pygame
 
@@ -290,7 +289,7 @@ class main:
 
             self.resize_planet([75,75])
             self.base_clicker_size = [0.15,0.234375]
-            self.clicker_shrink_rate = 0.90 #how much prosent it goes down by, so it will be % of the size of the old one
+            self.clicker_shrink_rate = 0.95 #how much prosent it goes down by, so it will be % of the size of the old one
             self.clicker_max_size = [0.4,0.625] #how much prosent of the width and height
             self.clicker_grow_rate = [10**-4 * i for i in [320,500]] #how much it grows by, prosent of width and height
 
@@ -300,6 +299,7 @@ class main:
             self.messages = False
             self.messager_length = self.width*0.25
             self.typing = False
+            self.message_goal = 10
 
         def get_area(self):
             return pygame.Rect(self.x + 3, self.y + self.title_height,
@@ -330,13 +330,13 @@ class main:
                         self.planet+=1
                         self.resize_planet([self.clicker_size[0]+self.clicker_grow_rate[0]*self.width, self.clicker_size[1]+self.clicker_grow_rate[1]*self.height])
                     elif self.get_bell_location().collidepoint(event.pos):
-                        if self.messages:
-                            self.messages = False
-                        else:
-                            self.messages = True
                         if self.selected_mail:
                             self.selected_mail = None
                             self.resize()
+                        elif self.messages:
+                            self.messages = False
+                        else:
+                            self.messages = True
                     else:
                         for mail, rect in self.get_row_rects():
                             if rect.collidepoint(event.pos):
@@ -352,7 +352,7 @@ class main:
                         self.selected_mail['accepted'].append([True,self.typing])
                     else:
                         self.selected_mail['accepted'] = [[True,self.typing]]
-                        self.typing = False
+                    self.typing = False
                 else:
                     self.typing += event.unicode
 
@@ -370,7 +370,7 @@ class main:
 
         def get_bell_location(self):
             area = self.get_area()
-            return pygame.rect.Rect(area.topleft[0],area.topleft[1], (self.width - 6)*0.08, (self.height-self.title_height - 3)*0.125)
+            return pygame.rect.Rect(area.topleft[0],area.topleft[1], 40, 40)
 
         def resize(self):
             self.msg = self.main.asset_path + 'bell.png'
@@ -379,7 +379,7 @@ class main:
             elif self.get_any_unread_messages(): #if unread messages
                 self.msg = self.main.asset_path + 'bell_alerted.png'
             self.msg = pygame.image.load(self.msg).convert_alpha()
-            self.msg = pygame.transform.scale(self.msg, ((self.width - 6)*0.08, (self.height-self.title_height - 3)*0.125))
+            self.msg = pygame.transform.scale(self.msg, (40,40))
 
             self.bk = self.main.asset_path + 'bg_pixel_space.png'
             self.bk = pygame.image.load(self.bk).convert_alpha()
@@ -427,6 +427,11 @@ class main:
             return pygame.Rect(list_rect.left + 10, area.bottom - 30, self.messager_length-20, 20)
 
         def draw_content(self):
+
+            if self.planet == self.message_goal:
+                self.message_goal *= 100
+                self.main.Send_message('Friendo','Hiiiiiiiiiii')
+
             screen = self.main.screen
             font = self.main.small_font
             msg_font =  self.main.smallest_font
@@ -494,26 +499,30 @@ class main:
                         
                         if type(self.selected_mail['accepted']) == list:
                             for sent_by_user, message in reversed(self.selected_mail['accepted']): #so it does the second, then the first
-                                message_box = None
-                                content = []
+                                lines = [msg_font.render(l, True, (80, 80, 80))
+                                        for l in self.wrap(message, message_bar.width * 0.95)]
+                                line_h = 8
+                                box = pygame.Rect(0, 0,
+                                        max(l.get_width() for l in lines) + 6,
+                                        len(lines) * line_h + 12)
+                                
+                                box.bottom = y #y is the bottom of the space still free, the gap between
+
                                 if sent_by_user:
-                                    y2 = y
-                                    for line in self.wrap(message, message_bar.width*0.85):
-                                        #.get_rect(topleft = (list_rect.left + 10 + self.messager_length/2, area.bottom - 20))
-                                        content.append(msg_font.render(line, True, (80,80,80)))
-                                        box = content[-1].get_rect(topleft = (self.get_message_bar().centerx,y))
-                                        if message_box:
-                                            message_box.union(box)
-                                        else:
-                                            message_box = box
-                                        y += 8
-                                    message_box = message_box.inflate(6, 6)
-                                    pygame.draw.ellipse(screen,(100,200,100),message_box)
-                                    for i in content:
-                                        screen.blit(i,(message_box.left+3,y2)) #todo, is on the left side, want it on the right side
-                                        y2 += 8
+                                    box.right = message_bar.right# right-aligned, which was your todo
+                                    colour = (100, 200, 100)
                                 else:
-                                    pass
+                                    box.left = message_bar.left
+                                    colour = (200, 200, 200)
+                                
+                                pygame.draw.rect(screen, colour, box, border_radius=8)
+
+                                temp_y = box.top + 3
+                                for l in lines:
+                                    screen.blit(l, (box.left + 6, temp_y))
+                                    temp_y += line_h
+                                y = box.top - line_h  
+
 
                     y -= 10
                 screen.set_clip(None)
@@ -541,6 +550,7 @@ class main:
         self.show_hit_boxes = False
 
         self.asset_path = './Nett detective assets/'
+        self.asset_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Nett detective assets') + os.sep
 
         self.bk = self.asset_path + 'windows-xp-desktop.png'
         self.bk = pygame.image.load(self.bk).convert_alpha()
@@ -548,11 +558,11 @@ class main:
 
         self.alerted_bell = self.asset_path + 'mail_notification.png'
         self.alerted_bell = pygame.image.load(self.alerted_bell).convert_alpha()
-        self.alerted_bell = pygame.transform.scale(self.alerted_bell, (30, 30))
+        self.alerted_bell = pygame.transform.scale(self.alerted_bell, (50, 50))
 
         self.bell = self.asset_path + 'mail_plain.png'
         self.bell = pygame.image.load(self.bell).convert_alpha()
-        self.bell = pygame.transform.scale(self.bell, (30,30))
+        self.bell = pygame.transform.scale(self.bell, (50,50))
 
         self.mouse = pygame.SYSTEM_CURSOR_ARROW
         
@@ -569,11 +579,11 @@ class main:
         self.open_windows = []
 
     def handle_task_bar(self):
-        pygame.draw.rect(self.screen, (50,50,200), pygame.Rect(0,self.height-25,self.width,self.height))
+        pygame.draw.rect(self.screen, (50,50,200), pygame.Rect(0,self.height-40,self.width,self.height))
         if self.notified:
-            self.screen.blit(self.alerted_bell,(self.width-30,self.height-30))
+            self.screen.blit(self.alerted_bell,(self.width-50,self.height-45))
         else:
-            self.screen.blit(self.bell,(self.width-30,self.height-30))
+            self.screen.blit(self.bell,(self.width-50,self.height-45))
     
     def Update_mouse(self,event):
         pygame.mouse.set_cursor(self.mouse)
@@ -627,11 +637,33 @@ class main:
                 i.hovered = i.get_box().collidepoint(event.pos) 
 
     def get_bell_rect(self):
-        return pygame.Rect(self.width - 30, self.height - 30, 30, 30)
+        return pygame.Rect(self.width - 50, self.height - 50, 50, 50)
 
     def Friend_request(self, sender='Unknown'):
         self.friend_list.insert(1, {'sender': sender, 'accepted': False, 'read': False, 'ignor': False})
         self.messaged = True
+
+    def Send_message(self, sender, text):
+        """A friend sends the player a message. Returns False if they aren't an accepted friend."""
+        for friend in self.friend_list:
+            if friend['sender'] == sender and friend['accepted']:
+                if friend['accepted'] is True:                 # accepted, but no messages yet
+                    friend['accepted'] = [[False, text]]       # not an empty list: [] counts as "not accepted"
+                else:
+                    friend['accepted'].append([False, text])
+
+                # only mark unread if the player isn't looking at this chat right now
+                viewing = any(isinstance(w, self.clicker_app) and w.selected_mail is friend
+                              for w in self.open_windows)
+                if not viewing:
+                    friend['read'] = False
+
+                # refresh the bell icon in any open Pixel World window
+                for w in self.open_windows:
+                    if isinstance(w, self.clicker_app):
+                        w.resize()
+                return True
+        return False
 
     def Push_notification(self, subject, body, sender='Unknown'):
         self.inbox.insert(0, {'sender': sender, 'subject': subject, 'body': body, 'read': False})
@@ -643,6 +675,7 @@ class main:
         mail.set_name('E-post')
         mail.opens = self.email_app
         mail.y = 170
+        mail.x = 10
         self.email_shortcut = mail
         self.desktop_shortcuts.append(mail)
 
@@ -651,6 +684,7 @@ class main:
         mail.set_name('Pixel World')
         mail.opens = self.clicker_app
         mail.y = 50
+        mail.x = 50
         self.desktop_shortcuts.append(mail)
 
         self.Push_notification('Welcome', 'Hi! This is a test email.\n\nIf you can read this, the email app works.', 'Admin')
