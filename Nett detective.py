@@ -298,6 +298,7 @@ class main:
             self.planet = 0
             self.messages = False
             self.messager_length = self.width*0.25
+            self.typing = False
 
         def get_area(self):
             return pygame.Rect(self.x + 3, self.y + self.title_height,
@@ -310,7 +311,7 @@ class main:
             return False
 
         def handle_event(self, event):
-            used = super().handle_event(event)
+            used = super().handle_event(event) #the window.handle_event, runs and checks if it should check for mouse in this one
             if used and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if self.get_area().collidepoint(event.pos): #if it is clicked in the app
                     if self.selected_mail:
@@ -321,6 +322,9 @@ class main:
                                 self.main.friend_list.remove(self.selected_mail)
                                 self.selected_mail = None
                                 self.resize()
+                        else:
+                            if self.get_message_bar().collidepoint(event.pos):
+                                self.typing = ' '
                     if self.get_clicker_location().collidepoint(event.pos):
                         self.planet+=1
                         self.resize_planet([self.clicker_size[0]+self.clicker_grow_rate[0]*self.width, self.clicker_size[1]+self.clicker_grow_rate[1]*self.height])
@@ -338,6 +342,19 @@ class main:
                                 self.selected_mail = mail
                                 mail['read'] = True
                                 self.resize()
+            
+            if event.type == pygame.KEYDOWN and self.typing: #will type if unfocused, todo , fix
+                if event.key == pygame.K_BACKSPACE:
+                    self.typing = self.typing[:-1]
+                elif event.key == pygame.K_RETURN:
+                    if type(self.selected_mail['accepted']) == list:
+                        self.selected_mail['accepted'].append([True,self.typing])
+                    else:
+                        self.selected_mail['accepted'] = [[True,self.typing]]
+                        self.typing = False
+                else:
+                    self.typing += event.unicode
+
             return used
 
         def resize_planet(self, new_size):
@@ -406,11 +423,12 @@ class main:
             area = self.get_area()
             list_rect = pygame.Rect(area.left, area.top, self.messager_length, area.height)
             
-            return pygame.Rect(list_rect.left + 5, area.bottom - 30, self.messager_length-10, 20)
+            return pygame.Rect(list_rect.left + 10, area.bottom - 30, self.messager_length-20, 20)
 
         def draw_content(self):
             screen = self.main.screen
             font = self.main.small_font
+            msg_font =  self.main.smallest_font
             area = self.get_area()
             list_rect = pygame.Rect(area.left, area.top, self.messager_length, area.height)
 
@@ -445,8 +463,9 @@ class main:
                         screen.blit(font.render(text, True, (0, 0, 0)), (x, y))
                         y += 22
                     pygame.draw.line(screen, (180, 180, 180), [list_rect.right,y], [list_rect.left,y])
-                    y = area.bottom - 20
+
                     if not self.selected_mail['accepted']:
+                        y = area.bottom - 20
                         screen.blit(font.render('Accept', True, (50,200,50)), (x + 10, y))
                         screen.blit(font.render('Deny', True, (200,50,50)), (x + 10 + self.messager_length/2, y))
 
@@ -454,7 +473,32 @@ class main:
                         #here is where the chating will happen, accepted will be the log,
                         #it will be a list of messages in order,
                         #accepted: [[True, 'this is your message, this is the first message']. [False,'this is their message, this is the second message']]
-                        pygame.draw.ellipse(screen, (180,180,180), self.get_message_bar())#, width=0)
+                        message_bar = self.get_message_bar()
+                        y = area.bottom - 30
+                        message_content = 'Send a chat'
+
+                        pygame.draw.circle(screen, (180, 180, 180), message_bar.midright, message_bar.height/2, width = 3, draw_bottom_right=True, draw_top_right=True)
+                        pygame.draw.circle(screen, (180, 180, 180), message_bar.midleft, message_bar.height/2, width = 3, draw_bottom_left=True, draw_top_left=True)
+                        pygame.draw.line(screen, (180, 180, 180), message_bar.topleft, message_bar.topright, width = 3)
+                        pygame.draw.line(screen, (180, 180, 180), message_bar.bottomleft, message_bar.bottomright, width = 3)
+
+                        if self.typing:
+                            message_content = self.typing
+
+                        for line in self.wrap(message_content, message_bar.width*1.4):
+                            screen.blit(msg_font.render(line, True, (130,130,130)),(self.get_message_bar().left,y))
+                            y += 8
+
+                        y = message_bar.top - 30
+                        if type(self.selected_mail['accepted']) == list:
+                            for sent_by_user, message in reversed(self.selected_mail['accepted']):
+                                if sent_by_user:
+                                    for line in self.wrap(message, message_bar.width*0.85):
+                                        screen.blit(msg_font.render(line, True, (130,130,130)),(self.get_message_bar().centerx,y)) #todo, is on the left side, want it on the right side
+                                        y += 8
+                                else:
+                                    pass
+
                     y -= 10
                 screen.set_clip(None)
 
@@ -499,6 +543,7 @@ class main:
         self.notified = False
         self.inbox = []
         self.small_font = pygame.font.Font(None, 22)
+        self.smallest_font = pygame.font.Font(None, 15)
 
         self.friend_list = []
         self.friend_list.insert(0, {'sender': ' ', 'accepted': False, 'read': True, 'ignor': True})
@@ -563,7 +608,7 @@ class main:
                     # keep the icon (and its label) on the desktop, above the taskbar
                     i.x = max(0, min(i.x, self.width - i.width))
                     i.y = max(0, min(i.y, self.height - 25 - i.height - 30))
-                i.hovered = i.get_box().collidepoint(event.pos)
+                i.hovered = i.get_box().collidepoint(event.pos) 
 
     def get_bell_rect(self):
         return pygame.Rect(self.width - 30, self.height - 30, 30, 30)
@@ -604,8 +649,6 @@ class main:
                 if event.type == pygame.QUIT:
                     self.running = False
                 elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_TAB:
-                        pass
                     if event.key == pygame.K_ESCAPE:
                         self.running = False
                 self.handle_mouse_events(event)
