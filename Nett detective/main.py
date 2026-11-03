@@ -17,8 +17,12 @@ Clock out 14:20
 1 hour 10/27/26
 wednessday
 Clock in 8:15
-
+Clock out 3:36
 '''
+
+#cd Cybersikerhet
+#pygbag --build "Nett detective/main.py"
+#Copy-Item -Recurse -Forse "Nett Detective\buil\web\*"
 
 #todo list:
 #make the resizing direction based, grab the side, resize the side
@@ -433,13 +437,13 @@ class main:
                     for i, mail in enumerate(self.shop_list)]
 
         def default_shop(self):
-            return [{'sender': 'clicker', 'number': 0, 'price': '10', 'asset':'Evil-plane.png', 'pps': 1},
-                    {'sender': 'satilite', 'number': 0, 'price': '100', 'asset':'Evil-plane.png', 'pps': 10},
-                    {'sender': 'moon', 'number': 0, 'price': '1000', 'asset':'Evil-plane.png', 'pps': 100},
-                    {'sender': 'plantet', 'number': 0, 'price': '10000', 'asset':'Evil-plane.png', 'pps': 1_000},
-                    {'sender': 'sun', 'number': 0, 'price': '100000', 'asset':'Evil-plane.png', 'pps': 10_000},
-                    {'sender': 'galexies', 'number': 0, 'price': '1000000', 'asset':'Evil-plane.png', 'pps': 100_000},
-                    {'sender': 'universes', 'number': 0, 'price': '10000000', 'asset':'Evil-plane.png', 'pps': 1_000_000}]
+            return [{'sender': 'clicker', 'number': 0, 'price': '10', 'asset':'clicker.png', 'pps': 1},
+                    {'sender': 'satilite', 'number': 0, 'price': '100', 'asset':'satelite.png', 'pps': 10},
+                    {'sender': 'moon', 'number': 0, 'price': '1000', 'asset':'full-moon.png', 'pps': 100},
+                    {'sender': 'plantet', 'number': 0, 'price': '10000', 'asset':'planet.png', 'pps': 1_000},
+                    {'sender': 'sun', 'number': 0, 'price': '100000', 'asset':'sun.png', 'pps': 10_000},
+                    {'sender': 'galexies', 'number': 0, 'price': '1000000', 'asset':'galaxy.png', 'pps': 100_000},
+                    {'sender': 'universes', 'number': 0, 'price': '10000000', 'asset':'universe.png', 'pps': 1_000_000}]
 
         def get_pps(self):
             return sum(item['number'] * item['pps'] for item in self.shop_list)
@@ -576,7 +580,7 @@ class main:
                                 box.bottom = y #y is the bottom of the space still free, the gap between
 
                                 if sent_by_user:
-                                    box.right = message_bar.right# right-aligned, which was your todo
+                                    box.right = message_bar.right# right-aligned
                                     colour = (100, 200, 100)
                                 else:
                                     box.left = message_bar.left
