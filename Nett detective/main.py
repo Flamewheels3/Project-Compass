@@ -419,6 +419,7 @@ class main:
                 if event.key == pygame.K_BACKSPACE:
                     self.typing = self.typing[:-1]
                 elif event.key == pygame.K_RETURN:
+                    self.main.check_password_leak(self.typing)
                     if type(self.selected_mail['accepted']) == list:
                         self.selected_mail['accepted'].append([True,self.typing])
                     else:
@@ -527,7 +528,10 @@ class main:
                     'denied': [n for n in self.main.message_script
                                if not any(f['sender'] == n for f in friends)],
                     'owned': {item['sender']: item['number'] for item in self.shop_list},
-                    'accounts': self.main.accounts}
+                    'accounts': self.main.accounts,
+                    'unsafe': self.main.unsafe,
+                    'unsafe_goal': self.main.unsafe_goal,
+                    'warning_sent': self.main.warning_sent}
             tmp = self.main.save_path + '.tmp'
             with open(tmp, 'w') as f:
                 json.dump(data, f)
@@ -560,6 +564,7 @@ class main:
                 self.save()
 
             self.check_messages()
+            self.main.check_unsafe(self.planet)
 
             screen = self.main.screen
             font = self.main.small_font
@@ -689,10 +694,132 @@ class main:
         def draw_content(self):
             font = self.main.small_font
             lines = ['Det var en svindel-e-post!',
-                     'Ekte selskaper gir deg ikke gratis penger.']
+                     'Ekte selskaper gir deg ikke gratis penger.',
+                     'OBS. Noen har stjålet passordet ditt']
             for i, line in enumerate(lines):
                 self.main.screen.blit(font.render(line, True, (0, 0, 0)),
                                       (self.x + 15, self.y + self.title_height + 15 + i * 24))
+
+    class settings_window(window):
+        def __init__(self, main):
+            super().__init__(main)
+            self.title = 'Innstillinger'
+            self.width = 320
+            self.height = 335
+            self.min_width = 320            # the layout is fixed
+            self.min_height = 335
+            self.x, self.y = 240, 100
+            self.fields = ['', '', '', '']  # current pw, new username, new pw, repeat pw
+            self.labels = ['Nåværende passord', 'Nytt brukernavn', 'Nytt passord', 'Gjenta nytt passord']
+            self.masked = [True, False, True, True]
+            self.focus = 0
+            self.message = ''
+            self.message_ok = False
+
+        def get_field_rect(self, i):
+            return pygame.Rect(self.x + 20, self.y + self.title_height + 28 + i * 52,
+                               self.width - 40, 26)
+
+        def get_button_rect(self):
+            return pygame.Rect(self.x + self.width // 2 - 50, self.y + self.title_height + 241, 100, 28)
+
+        def submit(self):
+            cur, new_name, new_pw, rep = self.fields
+            user = self.main.logged_in
+            new_name = new_name.strip()
+            rename = bool(new_name) and new_name != user
+
+            self.message_ok = False
+            if not self.main.check_password(user, cur):
+                self.message = 'Feil nåværende passord.'
+                self.fields[0] = ''
+                self.focus = 0
+                return
+            if not rename and not new_pw:
+                self.message = 'Ingenting å endre.'
+                return
+            if rename and new_name in self.main.accounts:
+                self.message = 'Brukernavnet er tatt.'
+                return
+            if new_pw and len(new_pw) < 4:
+                self.message = 'Passordet må ha minst 4 tegn.'
+                return
+            if new_pw and new_pw != rep:
+                self.message = 'Passordene er ikke like.'
+                self.fields[3] = ''
+                return
+
+            self.main.change_account(user, new_name if rename else None, new_pw or None)
+            self.fields = ['', '', '', '']
+            self.focus = 0
+            self.message = 'Endringene er lagret.'
+            self.message_ok = True
+
+        def handle_event(self, event):
+            used = super().handle_event(event)
+            if used and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not self.closed:
+                for i in range(4):
+                    if self.get_field_rect(i).collidepoint(event.pos):
+                        self.focus = i
+                if self.get_button_rect().collidepoint(event.pos):
+                    self.submit()
+
+            elif event.type == pygame.KEYDOWN and self.main.open_windows \
+                    and self.main.open_windows[-1] is self:          # only the top window gets typing
+                f = self.focus
+                if event.key == pygame.K_TAB:
+                    self.focus = (f + 1) % 4
+                elif event.key == pygame.K_RETURN:
+                    if f < 3:
+                        self.focus += 1
+                    else:
+                        self.submit()
+                elif event.key == pygame.K_BACKSPACE:
+                    self.fields[f] = self.fields[f][:-1]
+                elif event.unicode and event.unicode.isprintable() \
+                        and len(self.fields[f]) < (16 if f == 1 else 24):
+                    self.fields[f] += event.unicode
+                return True
+            return used
+
+        def draw_content(self):
+            screen = self.main.screen
+            font = self.main.small_font
+            screen.set_clip(self.get_area_rect())
+
+            for i in range(4):
+                r = self.get_field_rect(i)
+                screen.blit(font.render(self.labels[i], True, (0, 0, 0)), (r.left, r.top - 17))
+                pygame.draw.rect(screen, (255, 255, 255), r)
+                pygame.draw.rect(screen, (51, 153, 255) if i == self.focus else (130, 130, 130), r, 2)
+
+                if self.fields[i]:
+                    text = '*' * len(self.fields[i]) if self.masked[i] else self.fields[i]
+                    surf = font.render(text, True, (0, 0, 0))
+                elif i == 1:
+                    surf = font.render(self.main.logged_in or '', True, (150, 150, 150))   # shows the current name
+                else:
+                    surf = font.render('', True, (0, 0, 0))
+                screen.blit(surf, (r.left + 5, r.centery - surf.get_height() // 2))
+
+                if i == self.focus and (pygame.time.get_ticks() // 500) % 2 == 0:
+                    cx = r.left + 5 + (font.size('*' * len(self.fields[i]) if self.masked[i] else self.fields[i])[0]) + 1
+                    pygame.draw.line(screen, (0, 0, 0), (cx, r.top + 5), (cx, r.bottom - 5))
+
+            b = self.get_button_rect()
+            pygame.draw.rect(screen, (60, 130, 220), b, border_radius=4)
+            label = font.render('Lagre', True, (255, 255, 255))
+            screen.blit(label, label.get_rect(center=b.center))
+
+            if self.message:
+                colour = (30, 140, 50) if self.message_ok else (200, 50, 50)
+                msg = font.render(self.message, True, colour)
+                screen.blit(msg, msg.get_rect(midtop=(self.x + self.width // 2, b.bottom + 8)))
+            screen.set_clip(None)
+
+        def get_area_rect(self):
+            return pygame.Rect(self.x + 3, self.y + self.title_height,
+                               self.width - 6, self.height - self.title_height - 3)
 
     def __init__(self):
         #window sizes
@@ -714,7 +841,10 @@ class main:
         self.asset_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Nett detective assets') + os.sep
 
         self.save_path = self.asset_path + 'Progress.json'
-        #self.load() #todo, for when load is added to the whole thing 
+        flags = self.read_save()
+        self.unsafe = flags.get('unsafe', False)
+        self.unsafe_goal = flags.get('unsafe_goal', 0)
+        self.warning_sent = flags.get('warning_sent', False)
 
 
         self.bk = self.asset_path + 'windows-xp-desktop.png'
@@ -756,12 +886,18 @@ class main:
         self.create_fields = ['', '', '']            # username, password, repeat password
         self.create_focus = 0
 
+        self.power_icon = pygame.image.load(self.asset_path + 'power.png').convert_alpha()
+        self.power_icon = pygame.transform.scale(self.power_icon, (32, 32))
+
     def handle_task_bar(self):
         pygame.draw.rect(self.screen, (50,50,200), pygame.Rect(0,self.height-40,self.width,self.height))
         if self.notified:
             self.screen.blit(self.alerted_bell,(self.width-50,self.height-45))
         else:
             self.screen.blit(self.bell,(self.width-50,self.height-45))
+        self.screen.blit(self.power_icon, self.get_power_rect())
+        if self.get_power_rect().collidepoint(pygame.mouse.get_pos()):
+            pygame.draw.rect(self.screen, (255, 255, 255), self.get_power_rect(), 1, border_radius=4)   # hover outline
     
     def Update_mouse(self,event):
         pygame.mouse.set_cursor(self.mouse)
@@ -800,6 +936,7 @@ class main:
                 pass                                        # some platforms (e.g. the web build) lack system cursors
 
     def scam_clicked(self):
+        self.mark_unsafe()
         self.open_windows.append(self.scam_popup(self))
 
     def handle_mouse_events(self, event):
@@ -840,6 +977,9 @@ class main:
                     clicked.count_down = 0
                 else:
                     clicked.count_down = 30 # about 0.5 s at 60 FPS
+            if self.get_power_rect().collidepoint(event.pos):
+                self.log_out()
+                return
 
         elif event.type == pygame.MOUSEBUTTONUP:
             for i in self.desktop_shortcuts:
@@ -857,6 +997,29 @@ class main:
 
     def get_bell_rect(self):
         return pygame.Rect(self.width - 50, self.height - 50, 50, 50)
+
+    def get_power_rect(self):
+        return pygame.Rect(4, self.height - 38, 32, 32)
+
+    def log_out(self):
+        for w in self.open_windows:
+            if hasattr(w, 'save'):
+                w.save()                         # keep planets and chats
+        self.open_windows.clear()
+        for s in self.desktop_shortcuts:
+            s.link = None                        # so shortcuts open fresh windows after login
+            s.selected = False
+            s.grabbed = False
+        self.logged_in = None
+        self.login_mode = 'login'
+        self.login_user = next(iter(self.accounts), '')
+        self.login_password = ''
+        self.login_error = ''
+        self.mouse = pygame.SYSTEM_CURSOR_ARROW
+        try:
+            pygame.mouse.set_cursor(self.mouse)  # in case a resize cursor was showing
+        except Exception:
+            pass
 
     def load_friends(self):
         try:
@@ -903,6 +1066,40 @@ class main:
         self.inbox.insert(0, {'sender': sender, 'subject': subject, 'body': body, 'read': read, 'scam': scam})
         self.notified = True
 
+    def get_planets(self):
+        for w in self.open_windows:
+            if isinstance(w, self.clicker_app):
+                return w.planet
+        return self.read_save().get('planet', 0)      # Pixel World closed: use the saved count
+
+    def mark_unsafe(self):
+        if self.unsafe:
+            return                                    # already marked, keep the original goal
+        self.unsafe = True
+        self.unsafe_goal = max(self.get_planets(), 1) * 10    # max(..., 1) handles 0 planets: goal becomes 10
+        self.update_save(unsafe=True, unsafe_goal=self.unsafe_goal)
+
+    def check_unsafe(self, planets):
+        if self.unsafe and not self.warning_sent and planets >= self.unsafe_goal:
+            self.warning_sent = True
+            self.Push_notification('Sikkerhetsadvarsel',
+                                   'Vi har oppdaget uvanlig aktivitet på kontoen din.\n\n'
+                                   'Bytt passordet ditt i Innstillinger så snart som mulig.',
+                                   'Microsoft')
+            self.update_save(warning_sent=True)
+
+    def check_password_leak(self, text):
+        user = self.logged_in
+        if not user or self.unsafe:
+            return
+        # the whole message, plus each word with punctuation stripped
+        candidates = {text.strip()} | {w.strip('.,!?;:"\'()') for w in text.split()}
+        candidates.discard('')
+        for c in list(candidates)[:12]:               # cap the work: each check is a slow hash
+            if self.check_password(user, c):
+                self.mark_unsafe()
+                return
+
     def hash_password(self, password, salt):
         return hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), bytes.fromhex(salt), 100_000).hex()
 
@@ -912,6 +1109,21 @@ class main:
                 return json.load(f).get('accounts', {})
         except (FileNotFoundError, json.JSONDecodeError):
             return {}
+
+    def read_save(self):
+        try:
+            with open(self.save_path, encoding='utf-8') as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
+
+    def update_save(self, **values):
+        data = self.read_save()
+        data.update(values)                          # only touches the keys you pass
+        tmp = self.save_path + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+        os.replace(tmp, self.save_path)
 
     def save_accounts(self):
         try:
@@ -924,6 +1136,25 @@ class main:
         with open(tmp, 'w', encoding='utf-8') as f:
             json.dump(data, f)
         os.replace(tmp, self.save_path)
+
+    def check_password(self, user, pw):
+        acc = self.accounts.get(user)
+        return bool(acc) and hmac.compare_digest(acc['hash'], self.hash_password(pw, acc['salt']))
+
+    def change_account(self, user, new_name=None, new_pw=None):
+        acc = self.accounts[user]
+        if new_pw:
+            salt = os.urandom(16).hex()
+            acc = {'salt': salt, 'hash': self.hash_password(new_pw, salt)}
+        name = new_name or user
+        # rebuild the dict so the account keeps its place in the login screen's list
+        self.accounts = {(name if k == user else k): (acc if k == user else v)
+                         for k, v in self.accounts.items()}
+        if self.logged_in == user:
+            self.logged_in = name
+        if self.login_user == user:
+            self.login_user = name
+        self.save_accounts()
 
     def try_login(self, user, pw):
         acc = self.accounts.get(user)
@@ -1109,6 +1340,13 @@ class main:
         mail.y = 50
         mail.x = 50
         self.desktop_shortcuts.append(mail)
+
+        settings = self.shortcut(self)
+        settings.set_icon('cogwheel.png')           # swap for a gear icon later
+        settings.set_name('Innstillinger')
+        settings.opens = self.settings_window
+        settings.x, settings.y = 20, 290
+        self.desktop_shortcuts.append(settings)
 
         self.Push_notification('Welcome', 'Hei og takk for at du signet opp for Pixel World!', 'Pixel World')
         self.Push_notification('Welcome', 'Hei og takk for at du signet opp for Piksel World!\n Click på lenken for å få din sign up bonus på 1 MILLIONER PLANETER!!!!!!!', 'Piksel World', scam = 'Click meg')
