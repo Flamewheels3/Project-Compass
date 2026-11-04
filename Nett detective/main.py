@@ -2,8 +2,6 @@ import pygame
 import os
 import asyncio
 import json
-import time
-
 '''
 saturday
 Clock in 15:36
@@ -22,7 +20,7 @@ Clock out 3:36
 
 #cd Cybersikerhet
 #pygbag --build "Nett detective/main.py"
-#Copy-Item -Recurse -Forse "Nett Detective\buil\web\*"
+#Copy-Item -Recurse -Force "Nett Detective\build\web\*" docs
 
 #todo list:
 #make the resizing direction based, grab the side, resize the side
@@ -118,7 +116,9 @@ class main:
             self.resizeing = False
 
             self.resize_start_mouse = (0, 0)
-            self.resize_start_size = (0, 0)
+            self.edge_size = 6                       # how thick the grab zone is, in pixels
+            self.resize_edges = (False, False, False, False)   # left, right, top, bottom
+            self.resize_start_rect = pygame.Rect(0, 0, 0, 0)
             self.min_width = 150
             self.min_height = 80
 
@@ -135,6 +135,14 @@ class main:
             size = 5
             return pygame.Rect(self.x+size, self.y+size, self.width-size*2, self.height-size*2)
 
+        def get_edges(self, pos):
+            r = self.get_rect()
+            e = self.edge_size
+            return (pos[0] < r.left + e,       # left
+                    pos[0] >= r.right - e,     # right
+                    pos[1] < r.top + e,        # top
+                    pos[1] >= r.bottom - e)    # bottom
+
         def handle_event(self, event):
             """Returns True if the window used the event."""
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -142,13 +150,16 @@ class main:
                     return False
                 if self.get_close_rect().collidepoint(event.pos):
                     self.closed = True
-                elif self.get_title_rect().collidepoint(event.pos):
-                    self.dragging = True
-                    self.drag_offset = (event.pos[0] - self.x, event.pos[1] - self.y)
-                elif not self.get_resize_rect().collidepoint(event.pos):
-                    self.resizeing = True
-                    self.resize_start_mouse = event.pos
-                    self.resize_start_size = (self.width, self.height)
+                else:
+                    edges = self.get_edges(event.pos)
+                    if any(edges):                       # edges first, so the top edge wins over the title bar
+                        self.resizeing = True
+                        self.resize_edges = edges
+                        self.resize_start_mouse = event.pos
+                        self.resize_start_rect = self.get_rect()
+                    elif self.get_title_rect().collidepoint(event.pos):
+                        self.dragging = True
+                        self.drag_offset = (event.pos[0] - self.x, event.pos[1] - self.y)
                 return True
 
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
@@ -168,12 +179,25 @@ class main:
                     self.y = max(0, min(self.y, self.main.height - 25 - self.title_height))
                     return True
                 if self.resizeing:
+                    left, right, top, bottom = self.resize_edges
+                    r = self.resize_start_rect
                     dx = event.pos[0] - self.resize_start_mouse[0]
                     dy = event.pos[1] - self.resize_start_mouse[1]
-                    self.width = max(self.min_width, self.resize_start_size[0] + dx)
-                    self.height = max(self.min_height, self.resize_start_size[1] + dy)
-                    return True
 
+                    if right:
+                        self.width = max(self.min_width, r.width + dx)
+                    if left:
+                        new_left = min(r.left + dx, r.right - self.min_width)
+                        self.x = new_left
+                        self.width = r.right - new_left
+                    if bottom:
+                        self.height = max(self.min_height, r.height + dy)
+                    if top:
+                        new_top = min(max(0, r.top + dy), r.bottom - self.min_height)
+                        self.y = new_top
+                        self.height = r.bottom - new_top
+                    return True
+                    
             return False
 
         def draw(self):
@@ -310,7 +334,6 @@ class main:
             self.messager_length = self.width*0.25
             self.shop_length = self.messager_length
             self.typing = False
-            self.message_goal = 10
             self.auto_save_timer = 0
             self.auto_save_intervouls = 100
 
@@ -324,6 +347,19 @@ class main:
                     return True
             return False
 
+        def check_messages(self):
+            for friend in self.main.friend_list:
+                script = self.main.message_script.get(friend['sender'])
+                if not script or not friend['accepted']:       # no script, or not accepted yet
+                    continue
+                i = friend['next']
+                if i >= len(script):                            # everything already sent
+                    continue
+                needed, text = script[i]
+                if self.planet >= needed:
+                    if self.main.Send_message(friend['sender'], text):
+                        friend['next'] += 1
+
         def handle_event(self, event):
             used = super().handle_event(event) #the window.handle_event, runs and checks if it should check for mouse in this one
             if used and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -332,16 +368,19 @@ class main:
                         if not self.selected_mail['accepted']:
                             if self.get_accsept_button().collidepoint(event.pos):
                                 self.selected_mail['accepted'] = True
+                                self.save()
                             elif self.get_deny_button().collidepoint(event.pos):
                                 self.main.friend_list.remove(self.selected_mail)
                                 self.selected_mail = None
                                 self.resize()
+                                self.save()
                         else:
                             if self.get_message_bar().collidepoint(event.pos):
                                 self.typing = ' '
                     if self.get_clicker_location().collidepoint(event.pos):
                         self.planet+=1
                         self.resize_planet([self.clicker_size[0]+self.clicker_grow_rate[0]*self.width, self.clicker_size[1]+self.clicker_grow_rate[1]*self.height])
+                    
                     elif self.get_bell_location().collidepoint(event.pos):
                         if self.selected_mail:
                             self.selected_mail = None
@@ -361,6 +400,7 @@ class main:
                                 if self.planet >= int(mail['price']):
                                     mail['number'] += 1
                                     self.planet -= int(mail['price'])
+                                    self.save()
                                 self.resize()
             
             if event.type == pygame.KEYDOWN and self.typing: #will type if unfocused, todo , fix
@@ -372,6 +412,7 @@ class main:
                     else:
                         self.selected_mail['accepted'] = [[True,self.typing]]
                     self.typing = False
+                    self.save()
                 else:
                     self.typing += event.unicode
             
@@ -438,12 +479,12 @@ class main:
 
         def default_shop(self):
             return [{'sender': 'clicker', 'number': 0, 'price': '10', 'asset':'clicker.png', 'pps': 1},
-                    {'sender': 'satilite', 'number': 0, 'price': '100', 'asset':'satelite.png', 'pps': 10},
-                    {'sender': 'moon', 'number': 0, 'price': '1000', 'asset':'full-moon.png', 'pps': 100},
-                    {'sender': 'plantet', 'number': 0, 'price': '10000', 'asset':'planet.png', 'pps': 1_000},
-                    {'sender': 'sun', 'number': 0, 'price': '100000', 'asset':'sun.png', 'pps': 10_000},
-                    {'sender': 'galexies', 'number': 0, 'price': '1000000', 'asset':'galaxy.png', 'pps': 100_000},
-                    {'sender': 'universes', 'number': 0, 'price': '10000000', 'asset':'universe.png', 'pps': 1_000_000}]
+                    {'sender': 'satilite', 'number': 0, 'price': '100', 'asset':'satelite.png', 'pps': 10/2},
+                    {'sender': 'moon', 'number': 0, 'price': '1000', 'asset':'full-moon.png', 'pps': 100/2},
+                    {'sender': 'plantet', 'number': 0, 'price': '10000', 'asset':'planet.png', 'pps': 1_000/2},
+                    {'sender': 'sun', 'number': 0, 'price': '100000', 'asset':'sun.png', 'pps': 10_000/2},
+                    {'sender': 'galexies', 'number': 0, 'price': '1000000', 'asset':'galaxy.png', 'pps': 100_000/2},
+                    {'sender': 'universes', 'number': 0, 'price': '10000000', 'asset':'universe.png', 'pps': 1_000_000/2}]
 
         def get_pps(self):
             return sum(item['number'] * item['pps'] for item in self.shop_list)
@@ -463,8 +504,14 @@ class main:
                 item['number'] = owned.get(item['sender'], 0)
 
         def save(self):
+            friends = self.main.friend_list
             data = {'planet': self.planet,
-                    'message_goal': self.message_goal,
+                    'friends': {f['sender']: {'accepted': f['accepted'],
+                                              'read': f['read'],
+                                              'next': f['next']}
+                                for f in friends if f['sender'] in self.main.message_script},
+                    'denied': [n for n in self.main.message_script
+                               if not any(f['sender'] == n for f in friends)],
                     'owned': {item['sender']: item['number'] for item in self.shop_list}}
             tmp = self.main.save_path + '.tmp'
             with open(tmp, 'w') as f:
@@ -498,9 +545,7 @@ class main:
                 self.auto_save_timer = 0
                 self.save()
 
-            if self.planet >= self.message_goal:
-                self.message_goal *= 100
-                self.main.Send_message('Friendo','Hiiiiiiiiiii')
+            self.check_messages()
 
             screen = self.main.screen
             font = self.main.small_font
@@ -551,7 +596,7 @@ class main:
                         #it will be a list of messages in order,
                         #accepted: [[True, 'this is your message, this is the first message']. [False,'this is their message, this is the second message']]
                         message_bar = self.get_message_bar()
-                        y = area.bottom - 6
+                        y = area.bottom - 30
                         message_content = 'Send a chat'
 
                         pygame.draw.circle(screen, (180, 180, 180), message_bar.midright, message_bar.height/2, width = 3, draw_bottom_right=True, draw_top_right=True)
@@ -566,7 +611,7 @@ class main:
                             screen.blit(msg_font.render(line, True, (130,130,130)),(self.get_message_bar().left,y))
                             y += 8
 
-                        y = message_bar.top - 30
+                        y = message_bar.top - 10
                         
                         if type(self.selected_mail['accepted']) == list:
                             for sent_by_user, message in reversed(self.selected_mail['accepted']): #so it does the second, then the first
@@ -604,8 +649,8 @@ class main:
                 if self.planet >= int(mail['price']):
                     pygame.draw.rect(screen, (180, 180, 180), rect)
                     pygame.draw.rect(screen, (100, 200, 100), rect.inflate(0,-1))
-                screen.blit(font.render(f"{mail['sender']}:{mail['number']}", True, (0, 0, 0)), (rect.left + 20, rect.top + 4))
-                screen.blit(font.render(mail['price'], True, (90, 90, 90)), (rect.left + 20, rect.top + 21))
+                screen.blit(font.render(f"{mail['sender']}:{mail['number']}", True, (0, 0, 0)), (rect.left + 10, rect.top + 4))
+                screen.blit(font.render(mail['price'], True, (90, 90, 90)), (rect.left + 10, rect.top + 21))
                 icon = self.main.asset_path + mail['asset']
                 icon = pygame.image.load(icon).convert_alpha()
                 icon = pygame.transform.scale(icon, (40,40))
@@ -662,8 +707,12 @@ class main:
         self.smallest_font = pygame.font.Font(None, 15)
 
         self.friend_list = []
-        self.friend_list.insert(0, {'sender': ' ', 'accepted': False, 'read': True, 'ignor': True})
+        self.friend_list.insert(0, {'sender': ' ', 'accepted': False, 'read': True, 'ignor': True, 'next': -1})
         self.messaged = False
+        with open((self.asset_path + 'Messages.json'), encoding='utf-8') as f:
+            raw = json.load(f)
+            self.message_script = {name: sorted((int(k), text) for k, text in msgs.items())
+                                for name, msgs in raw.items()}
 
         self.desktop_shortcuts = []
         self.open_windows = []
@@ -685,7 +734,8 @@ class main:
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     self.open_windows.remove(w) # bring to front
                     self.open_windows.append(w)
-                if w.resizeing: #shocked this part works, self.open_windows realy is both
+                
+                if w.resizeing and hasattr(w, 'resize'): #shocked this part works, self.open_windows realy is both
                     w.resize()
                 return
 
@@ -729,10 +779,25 @@ class main:
     def get_bell_rect(self):
         return pygame.Rect(self.width - 50, self.height - 50, 50, 50)
 
+    def load_friends(self):
+        try:
+            with open(self.save_path, encoding='utf-8') as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return
+        saved = data.get('friends', {})
+        denied = data.get('denied', [])
+        for friend in self.friend_list[:]:
+            name = friend['sender']
+            if name in denied:
+                self.friend_list.remove(friend)          # you denied them last time
+            elif name in saved:
+                friend.update(saved[name])               # accepted (or chat log), read, next
+                    
     def Friend_request(self, sender='Unknown'):
-        self.friend_list.insert(1, {'sender': sender, 'accepted': False, 'read': False, 'ignor': False})
+        self.friend_list.insert(1, {'sender': sender, 'accepted': False, 'read': False, 'ignor': False, 'next': 0})
         self.messaged = True
-
+        
     def Send_message(self, sender, text):
         """A friend sends the player a message. Returns False if they aren't an accepted friend."""
         for friend in self.friend_list:
@@ -778,7 +843,12 @@ class main:
         self.desktop_shortcuts.append(mail)
 
         self.Push_notification('Welcome', 'Hi! This is a test email.\n\nIf you can read this, the email app works.', 'Admin')
-        self.Friend_request('Friendo')
+        
+        
+        for name in self.message_script:
+            self.Friend_request(name)
+        self.load_friends()
+
 
         while self.running:
 
