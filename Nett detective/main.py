@@ -2,6 +2,7 @@ import pygame
 import os
 import asyncio
 import json
+import random
 '''
 saturday
 Clock in 15:36
@@ -233,6 +234,7 @@ class main:
             self.row_height = 40
             self.selected_mail = None
             main.notified = False # opening the app clears the bell
+            self.link_rect = None
 
         def get_area(self):
             return pygame.Rect(self.x + 3, self.y + self.title_height,
@@ -248,6 +250,9 @@ class main:
             used = super().handle_event(event)
             if used and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if self.get_area().collidepoint(event.pos):
+                    if self.link_rect and self.link_rect.collidepoint(event.pos):
+                        self.main.scam_clicked()
+
                     for mail, rect in self.get_row_rects():
                         if rect.collidepoint(event.pos):
                             self.selected_mail = mail
@@ -275,6 +280,7 @@ class main:
             font = self.main.small_font
             area = self.get_area()
             list_rect = pygame.Rect(area.left, area.top, self.list_width, area.height)
+            self.link_rect = None
 
             # inbox list
             screen.set_clip(list_rect)
@@ -306,6 +312,11 @@ class main:
                 for line in self.wrap(self.selected_mail['body'], area.right - x - 10):
                     screen.blit(font.render(line, True, (0, 0, 0)), (x, y))
                     y += 22
+                if self.selected_mail['scam']:
+                    link = font.render(self.selected_mail['scam'], True, (0, 0, 238))
+                    self.link_rect = link.get_rect(topleft=(x, y + 6))
+                    screen.blit(link, self.link_rect)
+                    pygame.draw.line(screen, (0, 0, 238), self.link_rect.bottomleft, self.link_rect.bottomright)   # underline
             screen.set_clip(None)
             #pygame.draw.rect(screen, (50,200,50), list_rect)
 
@@ -390,11 +401,12 @@ class main:
                         else:
                             self.messages = True
                     else:
-                        for mail, rect in self.get_row_rects():
-                            if rect.collidepoint(event.pos):
-                                self.selected_mail = mail
-                                mail['read'] = True
-                                self.resize()
+                        if self.messages:
+                            for mail, rect in self.get_row_rects():
+                                if rect.collidepoint(event.pos):
+                                    self.selected_mail = mail
+                                    mail['read'] = True
+                                    self.resize()
                         for mail, rect in self.get_shop_rects():
                             if rect.collidepoint(event.pos):
                                 if self.planet >= int(mail['price']):
@@ -438,7 +450,7 @@ class main:
         def resize(self):
             self.msg = self.main.asset_path + 'bell.png'
             if self.selected_mail:
-                self.msg = self.main.asset_path + 'Evil-plane.png' #placeholder back arrow
+                self.msg = self.main.asset_path + 'arrow.png' #placeholder back arrow
             elif self.get_any_unread_messages(): #if unread messages
                 self.msg = self.main.asset_path + 'bell_alerted.png'
             self.msg = pygame.image.load(self.msg).convert_alpha()
@@ -447,7 +459,6 @@ class main:
             self.bk = self.main.asset_path + 'bg_pixel_space.png'
             self.bk = pygame.image.load(self.bk).convert_alpha()
             self.bk = pygame.transform.scale(self.bk, (self.width - 6, self.height-self.title_height - 3))
-            self.resize_planet([self.width*self.base_clicker_size[0],self.height*self.base_clicker_size[1]])
         
         def wrap(self, text, max_width):
             font = self.main.small_font
@@ -488,6 +499,9 @@ class main:
 
         def get_pps(self):
             return sum(item['number'] * item['pps'] for item in self.shop_list)
+
+        def reload_planet(self):
+            self.resize_planet([self.width*self.base_clicker_size[0],self.height*self.base_clicker_size[1]])
 
         def load(self):
             self.planet = 0
@@ -537,7 +551,6 @@ class main:
             return pygame.Rect(list_rect.left + 10, area.bottom - 30, self.messager_length-20, 20)
 
         def draw_content(self):
-
             dt = self.main.clock.get_time() / 1000 # seconds since the last frame
             self.planet += self.get_pps() * dt
             self.auto_save_timer += dt
@@ -580,7 +593,7 @@ class main:
                 if self.selected_mail:
                     pygame.draw.rect(screen, (245, 245, 245), list_rect)
                     x = list_rect.left
-                    y = area.top + 10
+                    y = area.top + 20
                     for text in ('',self.selected_mail['sender']):
                         screen.blit(font.render(text, True, (0, 0, 0)), (x, y))
                         y += 22
@@ -664,6 +677,22 @@ class main:
 
             screen.blit(font.render(str(int(self.planet)), True, (255, 255, 255)),area.midtop)
 
+    class scam_popup(window):
+        def __init__(self, main):
+            super().__init__(main)
+            self.title = 'Advarsel'
+            self.width = 320
+            self.height = 140
+            self.x, self.y = random.randint(10,500), random.randint(10,450)
+
+        def draw_content(self):
+            font = self.main.small_font
+            lines = ['Det var en svindel-e-post!',
+                     'Ekte selskaper gir deg ikke gratis penger.']
+            for i, line in enumerate(lines):
+                self.main.screen.blit(font.render(line, True, (0, 0, 0)),
+                                      (self.x + 15, self.y + self.title_height + 15 + i * 24))
+
     def __init__(self):
         #window sizes
         self.height = 600
@@ -727,7 +756,45 @@ class main:
     def Update_mouse(self,event):
         pygame.mouse.set_cursor(self.mouse)
 
+    def cursor_for_edges(self, edges):
+        left, right, top, bottom = edges
+        if (left and top) or (right and bottom):
+            return pygame.SYSTEM_CURSOR_SIZENWSE
+        if (right and top) or (left and bottom):
+            return pygame.SYSTEM_CURSOR_SIZENESW
+        if left or right:
+            return pygame.SYSTEM_CURSOR_SIZEWE
+        if top or bottom:
+            return pygame.SYSTEM_CURSOR_SIZENS
+        return pygame.SYSTEM_CURSOR_ARROW
+
+    def update_cursor(self, pos):
+        wanted = pygame.SYSTEM_CURSOR_ARROW
+
+        resizing = [w for w in self.open_windows if w.resizeing]
+        if resizing:
+            # keep the resize cursor while dragging, even if the mouse leaves the edge
+            wanted = self.cursor_for_edges(resizing[0].resize_edges)
+        elif not any(w.dragging for w in self.open_windows):
+            for w in reversed(self.open_windows):          # topmost window under the mouse decides
+                if w.get_rect().collidepoint(pos):
+                    if not w.get_close_rect().collidepoint(pos):
+                        wanted = self.cursor_for_edges(w.get_edges(pos))
+                    break
+
+        if wanted != self.mouse:                            # only touch the cursor when it changes
+            self.mouse = wanted
+            try:
+                pygame.mouse.set_cursor(wanted)
+            except Exception:
+                pass                                        # some platforms (e.g. the web build) lack system cursors
+
+    def scam_clicked(self):
+        self.open_windows.append(self.scam_popup(self))
+
     def handle_mouse_events(self, event):
+        if event.type == pygame.MOUSEMOTION:
+            self.update_cursor(event.pos)
         # windows get first pick, topmost (last in list) first
         for w in reversed(self.open_windows):
             if w.handle_event(event): #just True or false
@@ -737,6 +804,8 @@ class main:
                 
                 if w.resizeing and hasattr(w, 'resize'): #shocked this part works, self.open_windows realy is both
                     w.resize()
+                    w.reload_planet()
+                    
                 return
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -820,13 +889,13 @@ class main:
                 return True
         return False
 
-    def Push_notification(self, subject, body, sender='Unknown'):
-        self.inbox.insert(0, {'sender': sender, 'subject': subject, 'body': body, 'read': False})
+    def Push_notification(self, subject, body, sender='Unknown', read = False, scam = False):
+        self.inbox.insert(0, {'sender': sender, 'subject': subject, 'body': body, 'read': read, 'scam': scam})
         self.notified = True
 
     async def Start_Game(self):
         mail = self.shortcut(self)
-        mail.set_icon('Evil-plane.png')
+        mail.set_icon('mail_plain.png')
         mail.set_name('E-post')
         mail.opens = self.email_app
         mail.y = 170
@@ -842,8 +911,8 @@ class main:
         mail.x = 50
         self.desktop_shortcuts.append(mail)
 
-        self.Push_notification('Welcome', 'Hi! This is a test email.\n\nIf you can read this, the email app works.', 'Admin')
-        
+        self.Push_notification('Welcome', 'Hei og takk for at du signet opp for Pixel World!', 'Pixel World')
+        self.Push_notification('Welcome', 'Hei og takk for at du signet opp for Piksel World!\n Click på lenken for å få din sign up bonus på 1 MILLIONER PLANETER!!!!!!!', 'Piksel World', scam = 'Click meg')
         
         for name in self.message_script:
             self.Friend_request(name)
