@@ -3,6 +3,9 @@ import os
 import asyncio
 import json
 import random
+import hashlib
+import hmac
+
 '''
 saturday
 Clock in 15:36
@@ -24,9 +27,6 @@ Clock out 3:36
 #Copy-Item -Recurse -Force "Nett Detective\build\web\*" docs
 
 #todo list:
-#make the resizing direction based, grab the side, resize the side
-#make the resizing work on both sides
-#make the cursor change when you hover over the side
 #scroll bar to the email if it's resized too wrong
 #rezise the text so that it fits
 #makes it so that the notification is gone, not when it's open, but when all mails are marked as read
@@ -526,7 +526,8 @@ class main:
                                 for f in friends if f['sender'] in self.main.message_script},
                     'denied': [n for n in self.main.message_script
                                if not any(f['sender'] == n for f in friends)],
-                    'owned': {item['sender']: item['number'] for item in self.shop_list}}
+                    'owned': {item['sender']: item['number'] for item in self.shop_list},
+                    'accounts': self.main.accounts}
             tmp = self.main.save_path + '.tmp'
             with open(tmp, 'w') as f:
                 json.dump(data, f)
@@ -746,6 +747,15 @@ class main:
         self.desktop_shortcuts = []
         self.open_windows = []
 
+        self.accounts = self.load_accounts()         # {name: {'salt': ..., 'hash': ...}}
+        self.logged_in = None
+        self.login_mode = 'login' if self.accounts else 'create'
+        self.login_user = next(iter(self.accounts), '')
+        self.login_password = ''
+        self.login_error = ''
+        self.create_fields = ['', '', '']            # username, password, repeat password
+        self.create_focus = 0
+
     def handle_task_bar(self):
         pygame.draw.rect(self.screen, (50,50,200), pygame.Rect(0,self.height-40,self.width,self.height))
         if self.notified:
@@ -893,6 +903,195 @@ class main:
         self.inbox.insert(0, {'sender': sender, 'subject': subject, 'body': body, 'read': read, 'scam': scam})
         self.notified = True
 
+    def hash_password(self, password, salt):
+        return hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), bytes.fromhex(salt), 100_000).hex()
+
+    def load_accounts(self):
+        try:
+            with open(self.save_path, encoding='utf-8') as f:
+                return json.load(f).get('accounts', {})
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
+
+    def save_accounts(self):
+        try:
+            with open(self.save_path, encoding='utf-8') as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            data = {}
+        data['accounts'] = self.accounts             # keeps the rest of the save untouched
+        tmp = self.save_path + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+        os.replace(tmp, self.save_path)
+
+    def try_login(self, user, pw):
+        acc = self.accounts.get(user)
+        if acc and hmac.compare_digest(acc['hash'], self.hash_password(pw, acc['salt'])):
+            self.logged_in = user
+            return True
+        return False
+
+    def create_account(self):
+        name, pw, pw2 = [s.strip() if i == 0 else s for i, s in enumerate(self.create_fields)]
+        if not name:
+            self.login_error = 'Skriv inn et brukernavn.'
+        elif name in self.accounts:
+            self.login_error = 'Brukernavnet er tatt.'
+        elif len(pw) < 4:
+            self.login_error = 'Passordet må ha minst 4 tegn.'
+        elif pw != pw2:
+            self.login_error = 'Passordene er ikke like.'
+            self.create_fields[2] = ''
+        else:
+            salt = os.urandom(16).hex()
+            self.accounts[name] = {'salt': salt, 'hash': self.hash_password(pw, salt)}
+            self.save_accounts()
+            self.login_user = name
+            self.logged_in = name
+            self.login_error = ''
+            self.create_fields = ['', '', '']
+
+    def get_user_tiles(self):
+        return [(name, pygame.Rect(self.width // 2 - 130, 150 + i * 70, 260, 60))
+                for i, name in enumerate(self.accounts)]
+
+    def get_password_rect(self):
+        y = 150 + len(self.accounts) * 70 + 15
+        return pygame.Rect(self.width // 2 - 130, y, 226, 28)
+
+    def get_login_button(self):
+        r = self.get_password_rect()
+        return pygame.Rect(r.right + 6, r.top, 28, 28)
+
+    def get_create_field(self, i):
+        return pygame.Rect(self.width // 2 - 130, 170 + i * 65, 260, 28)
+
+    def get_create_button(self):
+        return pygame.Rect(self.width // 2 - 60, 170 + 3 * 65, 120, 32)
+
+    def draw_create(self):
+        screen = self.screen
+        title = self.font.render('Opprett bruker', True, (255, 255, 255))
+        screen.blit(title, title.get_rect(center=(self.width // 2, 90)))
+        hint = self.small_font.render('Ingen brukere funnet. Lag den første.', True, (200, 220, 255))
+        screen.blit(hint, hint.get_rect(center=(self.width // 2, 120)))
+
+        labels = ['Brukernavn', 'Passord', 'Gjenta passord']
+        for i in range(3):
+            r = self.get_create_field(i)
+            screen.blit(self.small_font.render(labels[i], True, (255, 255, 255)), (r.left, r.top - 18))
+            pygame.draw.rect(screen, (255, 255, 255), r, border_radius=4)
+            pygame.draw.rect(screen, (51, 153, 255) if i == self.create_focus else (130, 130, 130), r, 2, border_radius=4)
+            text = self.create_fields[i] if i == 0 else '*' * len(self.create_fields[i])
+            surf = self.small_font.render(text, True, (0, 0, 0))
+            screen.blit(surf, (r.left + 6, r.centery - surf.get_height() // 2))
+            if i == self.create_focus and (pygame.time.get_ticks() // 500) % 2 == 0:
+                cx = r.left + 6 + surf.get_width() + 1
+                pygame.draw.line(screen, (0, 0, 0), (cx, r.top + 5), (cx, r.bottom - 5))
+
+        b = self.get_create_button()
+        pygame.draw.rect(screen, (60, 170, 70), b, border_radius=4)
+        label = self.small_font.render('Opprett', True, (255, 255, 255))
+        screen.blit(label, label.get_rect(center=b.center))
+
+        if self.login_error:
+            err = self.small_font.render(self.login_error, True, (255, 150, 150))
+            screen.blit(err, err.get_rect(center=(self.width // 2, b.bottom + 22)))
+
+    def attempt_login(self):
+        if self.try_login(self.login_user, self.login_password):
+            self.login_password = ''
+            self.login_error = ''
+        else:
+            self.login_password = ''
+            self.login_error = 'Feil passord. Prøv igjen.'
+
+    def handle_login_event(self, event):
+        if self.login_mode == 'create':
+            if event.type == pygame.KEYDOWN:
+                f = self.create_focus
+                if event.key == pygame.K_TAB:
+                    self.create_focus = (f + 1) % 3
+                elif event.key == pygame.K_RETURN:
+                    if f < 2:
+                        self.create_focus += 1
+                    else:
+                        self.create_account()
+                elif event.key == pygame.K_BACKSPACE:
+                    self.create_fields[f] = self.create_fields[f][:-1]
+                elif event.unicode and event.unicode.isprintable() and len(self.create_fields[f]) < (16 if f == 0 else 24):
+                    self.create_fields[f] += event.unicode
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                for i in range(3):
+                    if self.get_create_field(i).collidepoint(event.pos):
+                        self.create_focus = i
+                if self.get_create_button().collidepoint(event.pos):
+                    self.create_account()
+            return
+        
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_RETURN:
+                self.attempt_login()
+            elif event.key == pygame.K_BACKSPACE:
+                self.login_password = self.login_password[:-1]
+            elif event.unicode and event.unicode.isprintable() and len(self.login_password) < 24:
+                self.login_password += event.unicode
+        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            for name, rect in self.get_user_tiles():
+                if rect.collidepoint(event.pos):
+                    self.login_user = name
+                    self.login_password = ''
+                    self.login_error = ''
+            if self.get_login_button().collidepoint(event.pos):
+                self.attempt_login()
+
+    def draw_login(self):
+        screen = self.screen
+        screen.blit(self.bk, (0, 0))
+        shade = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+        shade.fill((0, 40, 120, 210))
+        screen.blit(shade, (0, 0))
+        if self.login_mode == 'create':
+            self.draw_create()
+            return
+
+        title = self.font.render('Velkommen', True, (255, 255, 255))
+        screen.blit(title, title.get_rect(center=(self.width // 2, 90)))
+        hint = self.small_font.render('Velg bruker og skriv inn passordet', True, (200, 220, 255))
+        screen.blit(hint, hint.get_rect(center=(self.width // 2, 120)))
+
+        for name, rect in self.get_user_tiles():
+            selected = name == self.login_user
+            pygame.draw.rect(screen, (60, 130, 220) if selected else (30, 70, 160), rect, border_radius=8)
+            pygame.draw.rect(screen, (255, 255, 255), rect, 2 if selected else 1, border_radius=8)
+            pygame.draw.circle(screen, (230, 230, 230), (rect.left + 30, rect.centery), 20)
+            letter = self.font.render(name[0].upper(), True, (30, 70, 160))
+            screen.blit(letter, letter.get_rect(center=(rect.left + 30, rect.centery)))
+            screen.blit(self.font.render(name, True, (255, 255, 255)), (rect.left + 62, rect.centery - 10))
+
+        # password field
+        r = self.get_password_rect()
+        pygame.draw.rect(screen, (255, 255, 255), r, border_radius=4)
+        pygame.draw.rect(screen, (51, 153, 255), r, 2, border_radius=4)
+        text = '*' * len(self.login_password) if self.login_password else 'Passord'
+        colour = (0, 0, 0) if self.login_password else (150, 150, 150)
+        surf = self.small_font.render(text, True, colour)
+        screen.blit(surf, (r.left + 6, r.centery - surf.get_height() // 2))
+        if (pygame.time.get_ticks() // 500) % 2 == 0:                       # blinking caret
+            cx = r.left + 6 + (surf.get_width() if self.login_password else 0) + 1
+            pygame.draw.line(screen, (0, 0, 0), (cx, r.top + 5), (cx, r.bottom - 5))
+
+        # arrow button
+        b = self.get_login_button()
+        pygame.draw.rect(screen, (60, 170, 70), b, border_radius=4)
+        pygame.draw.polygon(screen, (255, 255, 255),
+                            [(b.left + 9, b.top + 7), (b.left + 9, b.bottom - 7), (b.right - 7, b.centery)])
+
+        if self.login_error:
+            err = self.small_font.render(self.login_error, True, (255, 150, 150))
+            screen.blit(err, err.get_rect(center=(self.width // 2, b.bottom + 22)))
+
     async def Start_Game(self):
         mail = self.shortcut(self)
         mail.set_icon('mail_plain.png')
@@ -933,7 +1132,18 @@ class main:
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         self.running = False
-                self.handle_mouse_events(event)
+                
+                if self.logged_in:
+                    self.handle_mouse_events(event)
+                else:
+                    self.handle_login_event(event)
+
+            if not self.logged_in:
+                self.draw_login()
+                pygame.display.update()
+                self.clock.tick(self.FPS)
+                await asyncio.sleep(0)
+                continue
 
             for i in self.desktop_shortcuts:
                 if i.count_down > 0:
