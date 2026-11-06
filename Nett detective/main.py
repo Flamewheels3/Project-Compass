@@ -5,7 +5,7 @@ import json
 import random
 import hashlib
 import hmac
-
+import math
 '''
 saturday
 Clock in 15:36
@@ -20,6 +20,8 @@ Clock out 14:20
 wednessday
 Clock in 8:15
 Clock out 3:36
+wdnessday
+Clock in 12:15
 '''
 
 #cd Cybersikerhet
@@ -122,6 +124,9 @@ class main:
             self.resize_start_rect = pygame.Rect(0, 0, 0, 0)
             self.min_width = 150
             self.min_height = 80
+            self.maximized = False
+            self.restore_rect = None
+            self.can_maximize = True      # set to False for windows with a fixed layout
 
         def get_rect(self):
             return pygame.Rect(self.x, self.y, self.width, self.height)
@@ -137,13 +142,34 @@ class main:
             return pygame.Rect(self.x+size, self.y+size, self.width-size*2, self.height-size*2)
 
         def get_edges(self, pos):
+            if self.maximized:
+                return (False, False, False, False)
             r = self.get_rect()
             e = self.edge_size
             return (pos[0] < r.left + e,       # left
                     pos[0] >= r.right - e,     # right
                     pos[1] < r.top + e,        # top
                     pos[1] >= r.bottom - e)    # bottom
+        
+        def get_max_rect(self):
+            return pygame.Rect(self.x + self.width - 44, self.y + 3, 19, 19)
 
+        def on_resize(self):
+            pass                          # windows override this to rebuild size-dependent things
+
+        def toggle_maximize(self):
+            if self.maximized:
+                r = self.restore_rect
+                self.x, self.y, self.width, self.height = r.x, r.y, r.width, r.height
+                self.maximized = False
+            else:
+                self.restore_rect = self.get_rect()
+                self.x, self.y = 0, 0
+                self.width = self.main.width
+                self.height = self.main.height - 40      # leave the taskbar visible
+                self.maximized = True
+            self.on_resize()
+        
         def handle_event(self, event):
             """Returns True if the window used the event."""
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -151,6 +177,8 @@ class main:
                     return False
                 if self.get_close_rect().collidepoint(event.pos):
                     self.closed = True
+                elif self.can_maximize and self.get_max_rect().collidepoint(event.pos):
+                    self.toggle_maximize()
                 else:
                     edges = self.get_edges(event.pos)
                     if any(edges):                       # edges first, so the top edge wins over the title bar
@@ -221,6 +249,16 @@ class main:
             pygame.draw.rect(screen, (255, 255, 255), close, 1, border_radius=3)
             pygame.draw.line(screen, (255, 255, 255), (close.left + 5, close.top + 5), (close.right - 6, close.bottom - 6), 2)
             pygame.draw.line(screen, (255, 255, 255), (close.left + 5, close.bottom - 6), (close.right - 6, close.top + 5), 2)
+
+            if self.can_maximize:
+                m = self.get_max_rect()
+                pygame.draw.rect(screen, (60, 130, 220), m, border_radius=3)
+                pygame.draw.rect(screen, (255, 255, 255), m, 1, border_radius=3)
+                if self.maximized:      # restore icon: two overlapping squares
+                    pygame.draw.rect(screen, (255, 255, 255), (m.left + 7, m.top + 4, 8, 8), 1)
+                    pygame.draw.rect(screen, (255, 255, 255), (m.left + 4, m.top + 7, 8, 8), 1)
+                else:                   # maximize icon: one square
+                    pygame.draw.rect(screen, (255, 255, 255), (m.left + 4, m.top + 4, 11, 11), 2)
 
     class email_app(window):
         def __init__(self, main):
@@ -348,6 +386,17 @@ class main:
             self.auto_save_timer = 0
             self.auto_save_intervouls = 100
 
+            self.num = 0
+
+            self.rotating_icons = {}
+            self.rotating_images = {}
+            for i in self.shop_list:
+                self.rotating_icons[i['sender']] = [random.randint(0,360) for _ in range(i['number'])] #it will be [deg,deg], where it is degresse on a loop, with some minor shaking, like a sin function
+                icon = self.main.asset_path + i['sender'] + '.png'
+                icon = pygame.image.load(icon).convert_alpha()
+                icon = pygame.transform.scale(icon, (10,10))
+                self.rotating_images[i['sender']] = icon
+
         def get_area(self):
             return pygame.Rect(self.x + 3, self.y + self.title_height,
                                self.width - 6, self.height - self.title_height - 3)
@@ -411,6 +460,10 @@ class main:
                             if rect.collidepoint(event.pos):
                                 if self.planet >= int(mail['price']):
                                     mail['number'] += 1
+                                    if mail['sender'] in self.rotating_icons:
+                                        self.rotating_icons[mail['sender']].append(random.randint(0,360))
+                                    else:
+                                        self.rotating_icons[mail['sender']] = [random.randint(0,360)]
                                     self.planet -= int(mail['price'])
                                     self.save()
                                 self.resize()
@@ -460,7 +513,15 @@ class main:
             self.bk = self.main.asset_path + 'bg_pixel_space.png'
             self.bk = pygame.image.load(self.bk).convert_alpha()
             self.bk = pygame.transform.scale(self.bk, (self.width - 6, self.height-self.title_height - 3))
-        
+
+        def on_resize(self):
+            self.resize()
+            self.reload_planet()
+
+        def get_point_on_circle(self, degrey, multi):
+            degrey = math.radians(degrey)
+            return [self.width*self.base_clicker_size[0] * math.sin(degrey) * multi - 5, self.height*self.base_clicker_size[1] * math.cos(degrey) * multi - 5]
+
         def wrap(self, text, max_width):
             font = self.main.small_font
             lines = []
@@ -491,12 +552,12 @@ class main:
 
         def default_shop(self):
             return [{'sender': 'clicker', 'number': 0, 'price': '10', 'asset':'clicker.png', 'pps': 1},
-                    {'sender': 'satilite', 'number': 0, 'price': '100', 'asset':'satelite.png', 'pps': 10/2},
-                    {'sender': 'moon', 'number': 0, 'price': '1000', 'asset':'full-moon.png', 'pps': 100/2},
-                    {'sender': 'plantet', 'number': 0, 'price': '10000', 'asset':'planet.png', 'pps': 1_000/2},
+                    {'sender': 'satilite', 'number': 0, 'price': '100', 'asset':'satilite.png', 'pps': 10/2},
+                    {'sender': 'moon', 'number': 0, 'price': '1000', 'asset':'moon.png', 'pps': 100/2},
+                    {'sender': 'planet', 'number': 0, 'price': '10000', 'asset':'planet.png', 'pps': 1_000/2},
                     {'sender': 'sun', 'number': 0, 'price': '100000', 'asset':'sun.png', 'pps': 10_000/2},
-                    {'sender': 'galexies', 'number': 0, 'price': '1000000', 'asset':'galaxy.png', 'pps': 100_000/2},
-                    {'sender': 'universes', 'number': 0, 'price': '10000000', 'asset':'universe.png', 'pps': 1_000_000/2}]
+                    {'sender': 'galaxy', 'number': 0, 'price': '1000000', 'asset':'galaxy.png', 'pps': 100_000/2},
+                    {'sender': 'universe', 'number': 0, 'price': '10000000', 'asset':'universe.png', 'pps': 1_000_000/2}]
 
         def get_pps(self):
             return sum(item['number'] * item['pps'] for item in self.shop_list)
@@ -577,6 +638,18 @@ class main:
                 self.resize_planet([i*self.clicker_shrink_rate for i in self.clicker_size])
 
             screen.blit(self.bk,(area.topleft))
+
+            multi = 0.5
+            if self.rotating_icons:
+                for i in self.rotating_icons:
+                    if i == 'clicker':
+                        continue
+                    multi += 0.2
+                    for j in range(len(self.rotating_icons[i])):
+                        bop = self.get_point_on_circle(self.rotating_icons[i][j],multi)
+                        self.rotating_icons[i][j] += 1
+                        screen.blit(self.rotating_images[i],(area.centerx+bop[0], area.centery+bop[1]))
+
 
             if self.messages:
                 # inbox list
@@ -683,6 +756,8 @@ class main:
 
             screen.blit(font.render(str(int(self.planet)), True, (255, 255, 255)),area.midtop)
 
+
+
     class scam_popup(window):
         def __init__(self, main):
             super().__init__(main)
@@ -690,6 +765,7 @@ class main:
             self.width = 320
             self.height = 140
             self.x, self.y = random.randint(10,500), random.randint(10,450)
+            self.can_maximize = False
 
         def draw_content(self):
             font = self.main.small_font
@@ -715,6 +791,7 @@ class main:
             self.focus = 0
             self.message = ''
             self.message_ok = False
+            self.can_maximize = False
 
         def get_field_rect(self, i):
             return pygame.Rect(self.x + 20, self.y + self.title_height + 28 + i * 52,
@@ -949,9 +1026,8 @@ class main:
                     self.open_windows.remove(w) # bring to front
                     self.open_windows.append(w)
                 
-                if w.resizeing and hasattr(w, 'resize'): #shocked this part works, self.open_windows realy is both
-                    w.resize()
-                    w.reload_planet()
+                if w.resizeing:
+                    w.on_resize()
                     
                 return
 
@@ -1345,7 +1421,7 @@ class main:
         settings.set_icon('cogwheel.png')           # swap for a gear icon later
         settings.set_name('Innstillinger')
         settings.opens = self.settings_window
-        settings.x, settings.y = 20, 290
+        settings.x, settings.y = 25, 290
         self.desktop_shortcuts.append(settings)
 
         self.Push_notification('Welcome', 'Hei og takk for at du signet opp for Pixel World!', 'Pixel World')
