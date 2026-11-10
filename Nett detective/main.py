@@ -22,6 +22,7 @@ Clock in 8:15
 Clock out 3:36
 wdnessday
 Clock in 12:15
+Clock out 3:30 ish
 '''
 
 #cd Cybersikerhet
@@ -32,6 +33,8 @@ Clock in 12:15
 #scroll bar to the email if it's resized too wrong
 #rezise the text so that it fits
 #makes it so that the notification is gone, not when it's open, but when all mails are marked as read
+
+#ok, so then, the age group this game is meant for is 5th to 7th graders, however i worry that they might get lost, so i want to create a bit more of a red thread through the game, any ideas?
 
 import pygame
 
@@ -295,6 +298,7 @@ class main:
                         if rect.collidepoint(event.pos):
                             self.selected_mail = mail
                             mail['read'] = True
+                            self.main.save_inbox()
             return used
 
         def wrap(self, text, max_width):
@@ -372,7 +376,7 @@ class main:
 
             self.resize_planet([75,75])
             self.base_clicker_size = [0.15,0.234375]
-            self.clicker_shrink_rate = 0.95 #how much prosent it goes down by, so it will be % of the size of the old one
+            self.clicker_shrink_rate = 0.9 #how much prosent it goes down by, so it will be % of the size of the old one
             self.clicker_max_size = [0.4,0.625] #how much prosent of the width and height
             self.clicker_grow_rate = [10**-4 * i for i in [320,500]] #how much it grows by, prosent of width and height
 
@@ -383,6 +387,8 @@ class main:
             self.messager_length = self.width*0.25
             self.shop_length = self.messager_length
             self.typing = False
+            self.friend_multiplier = {'Filip': 1, 'Mika': 0, 'ShadowX': 0.1}
+
             self.auto_save_timer = 0
             self.auto_save_intervouls = 100
 
@@ -400,6 +406,13 @@ class main:
         def get_area(self):
             return pygame.Rect(self.x + 3, self.y + self.title_height,
                                self.width - 6, self.height - self.title_height - 3)
+
+        def short_number(self, n):
+            n = int(n)
+            for limit, suffix in ((10**9, 'B'), (10**6, 'M'), (10**3, 'K')):
+                if n >= limit:
+                    return f"{n / limit:.1f}{suffix}"
+            return str(n)
 
         def get_any_unread_messages(self):
             for i in self.main.friend_list:
@@ -581,22 +594,13 @@ class main:
 
         def save(self):
             friends = self.main.friend_list
-            data = {'planet': self.planet,
-                    'friends': {f['sender']: {'accepted': f['accepted'],
-                                              'read': f['read'],
-                                              'next': f['next']}
-                                for f in friends if f['sender'] in self.main.message_script},
-                    'denied': [n for n in self.main.message_script
-                               if not any(f['sender'] == n for f in friends)],
-                    'owned': {item['sender']: item['number'] for item in self.shop_list},
-                    'accounts': self.main.accounts,
-                    'unsafe': self.main.unsafe,
-                    'unsafe_goal': self.main.unsafe_goal,
-                    'warning_sent': self.main.warning_sent}
-            tmp = self.main.save_path + '.tmp'
-            with open(tmp, 'w') as f:
-                json.dump(data, f)
-            os.replace(tmp, self.main.save_path)# a crash mid-write can't corrupt the real file
+            self.main.update_save(
+                planet=self.planet,
+                friends={f['sender']: {'accepted': f['accepted'], 'read': f['read'], 'next': f['next']}
+                         for f in friends if f['sender'] in self.main.message_script},
+                denied=[n for n in self.main.message_script
+                        if not any(f['sender'] == n for f in friends)],
+                owned={item['sender']: item['number'] for item in self.shop_list})
 
         def get_accsept_button(self):
             area = self.get_area()
@@ -650,7 +654,6 @@ class main:
                         self.rotating_icons[i][j] += 1
                         screen.blit(self.rotating_images[i],(area.centerx+bop[0], area.centery+bop[1]))
 
-
             if self.messages:
                 # inbox list
                 screen.set_clip(list_rect)
@@ -665,6 +668,10 @@ class main:
                         pygame.draw.circle(screen, (51, 153, 255), (rect.left + 10, rect.centery), 4)
                     screen.blit(font.render(mail['sender'], True, (0, 0, 0)), (rect.left + 20, rect.top + 4))
                     pygame.draw.line(screen, (210, 210, 210), rect.bottomleft, rect.bottomright)
+                    if mail['accepted']:
+                        number = self.planet * self.friend_multiplier[mail['sender']]
+                        screen.blit(font.render(self.short_number(number), True, (90, 90, 90)),
+                                    (rect.left + 20, rect.top + 21))
 
                 #reading pane
                 screen.set_clip(area)
@@ -755,8 +762,6 @@ class main:
             screen.blit(self.clicker_icon,(area.center[0]-self.clicker_size[0]/2,area.center[1]-self.clicker_size[1]/2))
 
             screen.blit(font.render(str(int(self.planet)), True, (255, 255, 255)),area.midtop)
-
-
 
     class scam_popup(window):
         def __init__(self, main):
@@ -966,6 +971,9 @@ class main:
         self.power_icon = pygame.image.load(self.asset_path + 'power.png').convert_alpha()
         self.power_icon = pygame.transform.scale(self.power_icon, (32, 32))
 
+        self.toasts = []
+        self.toast_icon = pygame.transform.scale(self.bell, (32, 32))
+
     def handle_task_bar(self):
         pygame.draw.rect(self.screen, (50,50,200), pygame.Rect(0,self.height-40,self.width,self.height))
         if self.notified:
@@ -1033,10 +1041,23 @@ class main:
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             clicked = None
+            for t in self.toasts:
+                if t['rect'] and t['rect'].collidepoint(event.pos):
+                    self.toasts.remove(t)
+                    self.email_shortcut.run()            # opens E-post, or raises it if already open
+                    app = self.email_shortcut.link
+                    if app and t['mail'] in self.inbox:
+                        app.selected_mail = t['mail']          # show this email in the reading pane
+                        t['mail']['read'] = True
+                        self.save_inbox()
+                    self.notified = False
+                    return
+                
             if self.notified and self.get_bell_rect().collidepoint(event.pos):
                 self.notified = False
                 self.email_shortcut.run() # opens the app, or brings it to the front
                 return
+            
             for i in self.desktop_shortcuts:
                 if i.get_box().collidepoint(event.pos):
                     clicked = i
@@ -1092,6 +1113,7 @@ class main:
         self.login_password = ''
         self.login_error = ''
         self.mouse = pygame.SYSTEM_CURSOR_ARROW
+        self.toasts.clear()
         try:
             pygame.mouse.set_cursor(self.mouse)  # in case a resize cursor was showing
         except Exception:
@@ -1138,9 +1160,12 @@ class main:
                 return True
         return False
 
-    def Push_notification(self, subject, body, sender='Unknown', read = False, scam = False):
-        self.inbox.insert(0, {'sender': sender, 'subject': subject, 'body': body, 'read': read, 'scam': scam})
+    def Push_notification(self, subject, body, sender='Unknown', read=False, scam=False):
+        mail = {'sender': sender, 'subject': subject, 'body': body, 'read': read, 'scam': scam}
+        self.inbox.insert(0, mail)
         self.notified = True
+        self.toasts.append({'sender': sender, 'subject': subject, 'mail': mail, 'born': None, 'rect': None})
+        self.save_inbox()
 
     def get_planets(self):
         for w in self.open_windows:
@@ -1212,6 +1237,9 @@ class main:
         with open(tmp, 'w', encoding='utf-8') as f:
             json.dump(data, f)
         os.replace(tmp, self.save_path)
+
+    def save_inbox(self):
+        self.update_save(inbox=self.inbox)
 
     def check_password(self, user, pw):
         acc = self.accounts.get(user)
@@ -1305,6 +1333,46 @@ class main:
         if self.login_error:
             err = self.small_font.render(self.login_error, True, (255, 150, 150))
             screen.blit(err, err.get_rect(center=(self.width // 2, b.bottom + 22)))
+
+    def fit_text(self, text, max_width):
+        if self.small_font.size(text)[0] <= max_width:
+            return text
+        while text and self.small_font.size(text + '...')[0] > max_width:
+            text = text[:-1]
+        return text + '...'
+
+    def draw_toasts(self):
+        now = pygame.time.get_ticks()
+        duration, slide = 4000, 250                      # total ms on screen, ms for sliding in/out
+        w, h, gap = 260, 52, 6
+
+        self.toasts = [t for t in self.toasts if t['born'] is None or now - t['born'] < duration]
+
+        y = self.height - 48                             # bottom edge, just above the taskbar
+        for t in reversed(self.toasts[-3:]):             # at most 3 visible, newest at the bottom
+            if t['born'] is None:
+                t['born'] = now
+            age = now - t['born']
+            if age < slide:
+                p = age / slide
+            elif age > duration - slide:
+                p = (duration - age) / slide
+            else:
+                p = 1
+            p = max(0, min(1, p))
+
+            rect = pygame.Rect(self.width - (w + 10) * p, y - h, w, h)
+            t['rect'] = rect
+            y -= h + gap
+
+            pygame.draw.rect(self.screen, (35, 60, 130), rect, border_radius=6)
+            pygame.draw.rect(self.screen, (255, 255, 255), rect, 1, border_radius=6)
+            self.screen.blit(self.toast_icon, (rect.left + 8, rect.centery - 16))
+            text_w = w - 56
+            self.screen.blit(self.small_font.render(self.fit_text(t['sender'], text_w), True, (255, 255, 255)),
+                             (rect.left + 48, rect.top + 8))
+            self.screen.blit(self.small_font.render(self.fit_text(t['subject'], text_w), True, (190, 210, 255)),
+                             (rect.left + 48, rect.top + 28))
 
     def attempt_login(self):
         if self.try_login(self.login_user, self.login_password):
@@ -1424,9 +1492,15 @@ class main:
         settings.x, settings.y = 25, 290
         self.desktop_shortcuts.append(settings)
 
-        self.Push_notification('Welcome', 'Hei og takk for at du signet opp for Pixel World!', 'Pixel World')
-        self.Push_notification('Welcome', 'Hei og takk for at du signet opp for Piksel World!\n Click på lenken for å få din sign up bonus på 1 MILLIONER PLANETER!!!!!!!', 'Piksel World', scam = 'Click meg')
-        
+
+        saved_inbox = self.read_save().get('inbox')
+        if saved_inbox is not None:
+            self.inbox = saved_inbox
+            self.notified = any(not m['read'] for m in self.inbox)     # bell lights up if anything is unread
+        else:
+            self.Push_notification('Welcome', 'Hei og takk for at du signet opp for Pixel World!', 'Pixel World')
+            self.Push_notification('Welcome', 'Hei og takk for at du signet opp for Piksel World!\n Click på lenken for å få din sign up bonus på 1 MILLIONER PLANETER!!!!!!!', 'Piksel World', scam='Click meg')
+
         for name in self.message_script:
             self.Friend_request(name)
         self.load_friends()
@@ -1470,6 +1544,7 @@ class main:
                 w.draw_content()
 
             self.handle_task_bar()
+            self.draw_toasts()
 
 
             pygame.display.update()
