@@ -1131,6 +1131,8 @@ class main:
                     pygame.draw.line(screen, (210, 210, 210), rect.bottomleft, rect.bottomright)
                     if mail['accepted'] and mail['sender'] in self.friend_multiplier:
                         number = self.planet * self.friend_multiplier[mail['sender']]
+                        if self.friend_multiplier[mail['sender']] == 0:
+                            number = 1000
                         screen.blit(font.render(self.main.short_number(number), True, (90, 90, 90)),
                                     (rect.left + 20, rect.top + ui(21)))
                     elif not mail['ignor']:
