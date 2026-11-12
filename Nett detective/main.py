@@ -6,6 +6,7 @@ import random
 import hashlib
 import hmac
 import math
+import re
 '''
 saturday
 Clock in 15:36
@@ -30,24 +31,23 @@ Clock out 3:30 ish
 #Copy-Item -Recurse -Force "Nett Detective\build\web\*" docs
 
 #done in this version:
-#planet shrinks and grows (spring) when clicked
-#taskbar with a button for every open window
-#reported emails are removed from the inbox (REMOVE_REPORTED_MAILS)
-#popups always open on top (z-order fix)
-#all numbers in Pixel World use the short form (K, M, B)
-#locked icons have a lock until they unlock
-#delete user button on the login screen
-#settings is a menu: password settings (locked until needed) and font settings (always open)
-#friend symbol instead of the bell in Pixel World
-#clickable things move to grab attention
-#scroll bar in the messenger (mouse wheel or drag)
-#reply buttons on the messages your friends send
-#toast inside Pixel World when a friend writes
+#you type your answers in the chats, and words like age / real name / photo / snapchat get flagged
+#SHOW_MISTAKE_POPUPS: a popup appears whenever the player makes a mistake
+#text size is a slider (0.1 - 1.0, then 1 - 10) plus a text box where you can type any number
+#Filip says "hei" back when you say "hei" to him
+#short_number switches to scientific notation from 1T
+#Accept / Deny stack on top of each other when they don't fit side by side
+#the amount you get floats up from the planet and fades away when you click it
 
 PRESTIGE_BASE = 1_000_000   # planets needed for the first prestige (x2 for the second, and so on)
 REMOVE_REPORTED_MAILS = True    # True: a reported email disappears from the inbox. False: it stays and is marked 'Rapportert'
+SHOW_MISTAKE_POPUPS = True      # True: a popup appears every time the player makes a mistake
+SHOW_REPLY_BUTTONS = True      # True: the pre-written reply buttons are shown above the message bar (typing always works)
 
-FONT_SCALES = [('Normal', 1.0), ('Stor', 1.2), ('Større', 1.4)]
+# text size: the slider stops. The text box accepts any number between SCALE_MIN and SCALE_MAX
+SCALE_MIN = 0.1
+SCALE_MAX = 10
+FONT_STOPS = [round(0.1 * i, 1) for i in range(1, 11)] + [2, 3, 4, 5, 6, 7, 8, 9, 10]
 
 # passwords that are "already known to hackers": using one marks the account as unsafe straight away
 UNSAFE_PASSWORDS = {
@@ -58,6 +58,31 @@ UNSAFE_PASSWORDS = {
     'norge', 'norway', 'fotball', 'football', 'baseball', 'princess', 'sunshine', 'superman', 'pokemon',
     'minecraft', 'roblox', 'fortnite', 'amogus', 'test', 'test123', 'secret', 'hemmelig', 'passw0rd',
     'p@ssw0rd', 'pixelworld', 'pixel', 'planet', 'jorda',
+}
+
+# friends the player should not accept (accepting one is counted as a mistake)
+RISKY_FRIENDS = {'ShadowX'}
+
+# words in the messages you type that get flagged. (tag, [patterns], does a "nei / aldri / ikke" cancel the flag?)
+# The text is lower-cased before it is checked. Add your own patterns here.
+KEYWORD_FLAGS = [
+    ('age', [r'\bjeg er \d{1,2}\b', r'\b\d{1,2} ?år\b', r'\bår gammel\b', r'\bfødt i\b', r'\bfødselsdag'], True),
+    ('real_name', [r'\bjeg heter\b', r'\bnavnet mitt\b', r'\bmitt navn\b', r'\bmitt ekte navn\b'], True),
+    ('move_chat', [r'\bsnapchat\b', r'\bsnap\b', r'\bdiscord\b', r'\binstagram\b', r'\btiktok\b', r'\bwhatsapp\b',
+                   r'\btelegram\b', r'\blegger deg til\b'], True),
+    ('photo', [r'\bbilde', r'\bselfie', r'\bfoto\b'], True),
+    ('secret', [r'\bsier (ingenting|ikke noe|det ikke)\b', r'\bhemmelig', r'\bforeldrene mine (får|skal) ikke\b',
+                r'\bsier det ikke til\b'], False),
+    ('address', [r'\bjeg bor\b', r'\bbor (i|på)\b', r'\badresse'], True),
+    ('school', [r'\bjeg går på\b', r'\bskolen min\b', r'\b\d\.? ?klasse\b', r'\bgår i \d'], True),
+    ('phone', [r'\btelefonnummer', r'\bnummeret mitt\b', r'\b\d{8}\b'], True),
+    ('password_word', [r'\bpassordet mitt\b', r'\bpassordet er\b', r'\bmitt passord\b'], True),
+]
+NEGATION = r'\b(nei|aldri|ikke|nekter|nope|stopp|slutt)\b'
+
+# friends that answer back when the player writes something. (pattern, answer)
+AUTO_REPLIES = {
+    'Filip': [(r'\b(hei|heihei|hallo|heisann)\b', 'Hei! :)')],
 }
 
 FRIEND_REPORT_POPUP = {
@@ -108,7 +133,8 @@ def _r(text, safe=True, tag='ok', leak=False):
     return {'text': text, 'safe': safe, 'tag': tag, 'leak': leak}
 
 
-# reply buttons for the messages in Messages.json. Key = number of the message in the friend's script (0 = the first one)
+# reply buttons for the messages in Messages.json (only shown when SHOW_REPLY_BUTTONS is True).
+# Key = number of the message in the friend's script (0 = the first one)
 FRIEND_REPLIES = {
     'Filip': {
         0: [_r('Ja, gjerne! :)'), _r('Nei takk, ikke nå.')],
@@ -141,12 +167,54 @@ FRIEND_REPLIES = {
 REPLY_FEEDBACK = {
     'age': 'Du sa hvor gammel du er.',
     'real_name': 'Du ga fra deg det ekte navnet ditt.',
-    'move_chat': 'Du sa ja til å snakke på andre apper.',
+    'move_chat': 'Du snakket om å flytte samtalen til en annen app.',
     'secret': 'Du lovte å holde samtalen hemmelig for foreldrene dine.',
-    'photo': 'Du sa ja til å sende et bilde av deg selv.',
-    'borrow': 'Du sa ja til å gi bort passordet ditt, så Mika kunne låne kontoen.',
+    'photo': 'Du snakket om å sende et bilde av deg selv.',
+    'borrow': 'Du sa ja til å gi bort passordet eller kontoen din.',
     'teasing': 'Du erter tilbake i stedet for å si fra til en voksen.',
+    'address': 'Du fortalte hvor du bor.',
+    'school': 'Du fortalte hvilken skole eller klasse du går i.',
+    'phone': 'Du ga fra deg et telefonnummer.',
+    'password_word': 'Du skrev om passordet ditt i en melding. Passord skal være hemmelige.',
 }
+
+
+def find_flags(text):
+    """Returns the tags of the key words found in a message the player typed."""
+    t = text.lower()
+    negated = re.search(NEGATION, t) is not None
+    found = []
+    for tag, patterns, cancelled_by_no in KEYWORD_FLAGS:
+        if cancelled_by_no and negated:
+            continue
+        if any(re.search(p, t) for p in patterns):
+            found.append(tag)
+    return found
+
+
+def scale_to_pos(v):
+    """Where on the slider (0 - 1) a text size is. Values between two stops (like 5.2) sit between them."""
+    n = len(FONT_STOPS)
+    if v <= FONT_STOPS[0]:
+        return 0.0
+    if v >= FONT_STOPS[-1]:
+        return 1.0
+    for i in range(n - 1):
+        a, b = FONT_STOPS[i], FONT_STOPS[i + 1]
+        if a <= v <= b:
+            return (i + (v - a) / (b - a)) / (n - 1)
+    return 0.0
+
+
+def parse_scale(text):
+    """Reads a number typed in the text box. Any number from SCALE_MIN to SCALE_MAX is allowed. None = not valid."""
+    try:
+        v = float(text.strip().replace(',', '.'))
+    except ValueError:
+        return None
+    if not (SCALE_MIN <= v <= SCALE_MAX):
+        return None
+    return v
 
 
 class main:
@@ -413,28 +481,32 @@ class main:
                     pygame.draw.rect(screen, (255, 255, 255), (m.left + 4, m.top + 4, 11, 11), 2)
 
     class message_window(window):
-        """A small window that just shows some text (report feedback, prestige info, ...)."""
+        """A small window that just shows some text (mistake popups, report feedback, ...)."""
         def __init__(self, main, title, text, width=380):
             super().__init__(main)
             self.title = title
             self.text = text
             self.width = width
             self.can_maximize = False
-            step = main.ui(22)
+            step = main.line_step(22)
             lines = main.wrap_text(text, width - 36)
-            self.height = self.title_height + 30 + len(lines) * step + 10
+            # the window never gets taller than the screen (the text is clipped if the text size is huge)
+            self.height = min(self.title_height + 30 + len(lines) * step + 10, main.height - 80)
             self.min_width = width
             self.min_height = self.height
             self.x = (main.width - width) // 2 + random.randint(-30, 30)
             self.y = max(20, (main.height - self.height) // 2 - 40 + random.randint(-20, 20))
 
         def draw_content(self):
-            step = self.main.ui(22)
+            screen = self.main.screen
+            step = self.main.line_step(22)
             lines = self.main.wrap_text(self.text, self.width - 36)
+            screen.set_clip(pygame.Rect(self.x + 3, self.y + self.title_height, self.width - 6, self.height - self.title_height - 3))
             y = self.y + self.title_height + 15
             for line in lines:
-                self.main.screen.blit(self.main.small_font.render(line, True, (0, 0, 0)), (self.x + 18, y))
+                screen.blit(self.main.small_font.render(line, True, (0, 0, 0)), (self.x + 18, y))
                 y += step
+            screen.set_clip(None)
 
     class email_app(window):
         def __init__(self, main):
@@ -514,7 +586,7 @@ class main:
             pygame.draw.line(screen, (180, 180, 180), list_rect.topright, list_rect.bottomright)
             if self.selected_mail:
                 mail = self.selected_mail
-                step = ui(22)
+                step = self.main.line_step(22)
                 x = list_rect.right + 10
                 y = area.top + 10
                 for text in ('From: ' + mail['sender'],
@@ -580,6 +652,8 @@ class main:
             self.auto_save_intervouls = 100
 
             self.prestige_confirm_until = 0
+
+            self.floaters = []                # the "+5" that floats up from the planet and fades away
 
             # messenger: scroll bar, reply buttons and the little toast inside the game
             self.chat_scroll = 0              # 0 = bottom (newest message), bigger = further up
@@ -699,6 +773,16 @@ class main:
                 self.main.update_save(unsafe_goal=self.main.unsafe_goal)
             self.save()
 
+        # ---------- the number that floats up when you click the planet ----------
+        def add_floater(self, pos, amount):
+            area = self.get_area()
+            self.floaters.append({'text': '+' + self.main.short_number(amount),
+                                  'x': pos[0] - area.left + random.randint(-12, 12),   # relative to the window, so it follows it
+                                  'y': pos[1] - area.top,
+                                  'born': pygame.time.get_ticks()})
+            if len(self.floaters) > 25:
+                self.floaters.pop(0)
+
         # ---------- friends / reporting / replies ----------
         def get_report_button(self):
             area = self.get_area()
@@ -725,16 +809,19 @@ class main:
 
         def current_reply_options(self):
             """Reply buttons for the last message, if it came from the friend and has not been answered yet."""
+            if not SHOW_REPLY_BUTTONS:
+                return []
             f = self.selected_mail
             if not f or type(f['accepted']) != list or not f['accepted']:
                 return []
-            if f['accepted'][-1][0]:                         # the player already wrote the last message
+            if f['accepted'][-1][0] or f.get('replied_to') == f['next']:    # already answered
                 return []
             return FRIEND_REPLIES.get(f['sender'], {}).get(f['next'] - 1, [])
 
         def send_reply(self, opt):
             friend = self.selected_mail
             friend['accepted'].append([True, opt['text']])
+            friend['replied_to'] = friend['next']
             self.main.record_reply(friend['sender'], opt)
             self.chat_scroll = 0
             self.save()
@@ -792,16 +879,38 @@ class main:
 
             return used
 
+        def get_request_buttons(self):
+            """Accept and Deny. Side by side when they fit in the narrow list, otherwise Accept on top of Deny."""
+            area = self.get_area()
+            font = self.main.font
+            a = font.render('Accept', True, (50, 200, 50)).get_rect()
+            d = font.render('Deny', True, (200, 50, 50)).get_rect()
+            left = area.left + 10
+            gap = 12
+            bottom = area.bottom - 4
+            if a.width + gap + d.width + 20 <= self.messager_length:
+                a.bottomleft = (left, bottom)
+                d.bottomright = (area.left + self.messager_length - 10, bottom)
+            else:
+                d.bottomleft = (left, bottom)
+                a.bottomleft = (left, d.top - 6)
+            return a, d
+
         def handle_area_click(self, pos):
             if self.selected_mail:
                 if not self.selected_mail['accepted']:
-                    if self.get_accsept_button().collidepoint(pos):
+                    accept_rect, deny_rect = self.get_request_buttons()
+                    if accept_rect.collidepoint(pos):
+                        name = self.selected_mail['sender']
                         self.selected_mail['accepted'] = True
-                        if self.selected_mail['sender'] in self.main.message_script:
+                        if name in self.main.message_script:
                             self.main.stats['accepted_friend'] = True
                             self.main.save_progress()
+                        if name in RISKY_FRIENDS:
+                            self.main.mistake(f'Pass på! Du kjenner ikke {name} i virkeligheten. '
+                                              'Ikke godta venneforespørsler fra folk du ikke kjenner.')
                         self.save()
-                    elif self.get_deny_button().collidepoint(pos):
+                    elif deny_rect.collidepoint(pos):
                         name = self.selected_mail['sender']
                         self.main.friend_list.remove(self.selected_mail)
                         self.main.stats.setdefault('denied_friends', []).append(name)
@@ -820,7 +929,9 @@ class main:
                         self.typing = ''
 
             if self.get_clicker_location().collidepoint(pos):
-                self.planet += self.multiplier() + self.shop_list[0]['number']
+                amount = self.multiplier() + self.shop_list[0]['number']
+                self.planet += amount
+                self.add_floater(pos, amount)         # shows what you got and fades away
                 self.pop_scale = 0.8                  # shrink now, the spring grows it back
                 self.pop_vel = 0.0
 
@@ -868,13 +979,16 @@ class main:
             elif event.key == pygame.K_RETURN:
                 text = self.typing.strip()
                 if text:
-                    self.main.check_password_leak(text, self.selected_mail['sender'])
-                    if type(self.selected_mail['accepted']) == list:
-                        self.selected_mail['accepted'].append([True, text])
+                    friend = self.selected_mail
+                    if type(friend['accepted']) == list:
+                        friend['accepted'].append([True, text])
                     else:
-                        self.selected_mail['accepted'] = [[True, text]]
+                        friend['accepted'] = [[True, text]]
+                    friend['replied_to'] = friend['next']
                     self.chat_scroll = 0
                     self.save()
+                    # checks the key words, may flag a mistake, and lets friends like Filip answer back
+                    self.main.handle_player_message(friend['sender'], text)
                 self.typing = None
             elif event.unicode and event.unicode.isprintable() and len(self.typing) < 200:
                 self.typing += event.unicode
@@ -958,24 +1072,13 @@ class main:
             self.main.update_save(
                 planet=self.planet,
                 prestige=self.prestige,
-                friends={f['sender']: {'accepted': f['accepted'], 'read': f['read'], 'next': f['next']}
+                friends={f['sender']: {'accepted': f['accepted'], 'read': f['read'], 'next': f['next'],
+                                       'replied_to': f.get('replied_to', -1)}
                          for f in friends if f['sender'] in self.main.message_script},
                 denied=[n for n in self.main.message_script
                         if not any(f['sender'] == n for f in friends)],
                 owned={item['sender']: item['number'] for item in self.shop_list})
             self.main.save_progress()
-
-        def get_accsept_button(self):
-            area = self.get_area()
-            list_rect = pygame.Rect(area.left, area.top, self.messager_length, area.height)
-
-            return self.main.small_font.render('Accept', True, (50,200,50)).get_rect(topleft = (list_rect.left + 10, area.bottom - 20))
-
-        def get_deny_button(self):
-            area = self.get_area()
-            list_rect = pygame.Rect(area.left, area.top, self.messager_length, area.height)
-
-            return self.main.small_font.render('Deny', True, (200,50,50)).get_rect(topleft = (list_rect.left + 10 + self.messager_length/2, area.bottom - 20))
 
         def get_message_bar(self):
             area = self.get_area()
@@ -1041,9 +1144,9 @@ class main:
                     pygame.draw.rect(screen, (245, 245, 245), list_rect)
 
                     if not self.selected_mail['accepted']:
-                        y = area.bottom - 20
-                        screen.blit(font.render('Accept', True, (50,200,50)), (list_rect.left + 10, y))
-                        screen.blit(font.render('Deny', True, (200,50,50)), (list_rect.left + 10 + self.messager_length/2, y))
+                        accept_rect, deny_rect = self.get_request_buttons()      # stacked when they don't fit side by side
+                        screen.blit(font.render('Accept', True, (50,200,50)), accept_rect.topleft)
+                        screen.blit(font.render('Deny', True, (200,50,50)), deny_rect.topleft)
 
                     else:
                         #here is where the chating will happen, accepted will be the log,
@@ -1058,18 +1161,18 @@ class main:
                         pygame.draw.line(screen, (180, 180, 180), message_bar.topleft, message_bar.topright, width = 3)
                         pygame.draw.line(screen, (180, 180, 180), message_bar.bottomleft, message_bar.bottomright, width = 3)
 
-                        if self.typing:
-                            message_content = self.typing
+                        if self.typing is not None:                 # what you are typing, with a blinking caret
+                            message_content = self.typing + ('|' if (now // 500) % 2 == 0 else ' ')
 
                         for line in self.wrap(message_content, message_bar.width*1.4):
                             screen.blit(msg_font.render(line, True, (130,130,130)),(self.get_message_bar().left,y))
                             y += 8
 
-                        line_h = ui(12)
+                        line_h = max(ui(12), msg_font.get_linesize() - 3)
                         chat_top = area.top + 66
                         bottom = message_bar.top - 6
 
-                        # reply buttons, stacked above the message bar (they pulse to grab attention)
+                        # reply buttons (only when SHOW_REPLY_BUTTONS is True), stacked above the message bar
                         options = self.current_reply_options()
                         if options:
                             pulse = 0.5 + 0.5 * math.sin(t * 5)
@@ -1193,6 +1296,27 @@ class main:
                 hint = msg_font.render(f"Prestige ved {self.main.short_number(self.prestige_cost())}", True, (190, 190, 210))
                 screen.blit(hint, (area.centerx - hint.get_width() // 2, area.bottom - 16))
 
+            # the "+5" from a click: floats up and fades away over one second
+            if self.floaters:
+                screen.set_clip(area)
+                alive = []
+                for f in self.floaters:
+                    age = (now - f['born']) / 1000
+                    if age >= 1.0:
+                        continue
+                    alive.append(f)
+                    alpha = int(255 * (1 - age))
+                    text = font.render(f['text'], True, (255, 235, 120))
+                    outline = font.render(f['text'], True, (0, 0, 0))
+                    text.set_alpha(alpha)
+                    outline.set_alpha(alpha)
+                    px = area.left + f['x'] - text.get_width() // 2
+                    py = area.top + f['y'] - 20 - age * 45
+                    screen.blit(outline, (px + 1, py + 1))
+                    screen.blit(text, (px, py))
+                self.floaters = alive
+                screen.set_clip(None)
+
             # toast inside the game when a friend writes (click it to open the chat)
             self.toast_rect = None
             if self.toast:
@@ -1243,12 +1367,13 @@ class main:
                                       (self.x + 15, self.y + self.title_height + 15 + i * 24))
 
     class settings_window(window):
-        """Settings menu: password settings (locked until needed) and font settings (always open)."""
+        """Settings menu: password settings (locked until needed) and font settings (always open).
+        This window always uses the normal text size, so you can always get back to the slider."""
         def __init__(self, main):
             super().__init__(main)
             self.title = 'Innstillinger'
             self.can_maximize = False
-            self.x, self.y = 220, 70
+            self.x, self.y = 220, 60
             self.view = 'menu'                  # 'menu', 'password' or 'font'
             self.fields = ['', '', '', '']      # current pw, new username, new pw, repeat pw
             self.labels = ['Nåværende passord', 'Nytt brukernavn', 'Nytt passord', 'Gjenta nytt passord']
@@ -1256,21 +1381,28 @@ class main:
             self.focus = 0
             self.message = ''
             self.message_kind = 'err'           # 'ok', 'warn' or 'err'
+            self.slider_drag = False
+            self.size_text = f'{main.font_scale:g}'     # what is in the text box
+            self.size_focus = False
             self.fit_size()
 
-        # ---- layout (everything is measured from the text size, so it still fits with big text)
+        # ---- layout
         def metrics(self):
-            ls = self.main.small_font.get_linesize()
+            ls = self.main.ui_font.get_linesize()
             return ls, ls + 10                  # line height, height of a field or button
+
+        def font_height(self):
+            ls, fh = self.metrics()
+            return self.title_height + 14 + ls + 20 + 8 + 12 + ls + 10 + ls + 4 + fh + 6 + ls + 12 + fh + 14
 
         def fit_size(self):
             ls, fh = self.metrics()
             th = self.title_height
-            w = self.main.ui(340)
+            w = 340
             if self.view == 'menu':
                 h = th + 16 + 2 * (2 * ls + 22) + 14 + 16
             elif self.view == 'font':
-                h = th + 16 + ls + 8 + len(FONT_SCALES) * (fh + 10) + 6 + 2 * ls + 12 + fh + 16
+                h = self.font_height()
             else:
                 block = ls + fh + 12
                 h = th + 12 + 4 * block + 3 * ls + 10 + fh + 16
@@ -1284,6 +1416,8 @@ class main:
             self.view = view
             self.message = ''
             self.focus = 0
+            self.size_focus = False
+            self.size_text = f'{self.main.font_scale:g}'
             self.fit_size()
 
         def content_top(self):
@@ -1293,10 +1427,6 @@ class main:
             ls, fh = self.metrics()
             h = 2 * ls + 22
             return pygame.Rect(self.x + 16, self.content_top() + 16 + i * (h + 14), self.width - 32, h)
-
-        def font_rect(self, i):
-            ls, fh = self.metrics()
-            return pygame.Rect(self.x + 16, self.content_top() + 16 + ls + 8 + i * (fh + 10), self.width - 32, fh)
 
         def field_rect(self, i):
             ls, fh = self.metrics()
@@ -1314,6 +1444,41 @@ class main:
         def get_area_rect(self):
             return pygame.Rect(self.x + 3, self.y + self.title_height,
                                self.width - 6, self.height - self.title_height - 3)
+
+        def font_layout(self):
+            ls, fh = self.metrics()
+            ct = self.content_top()
+            L = {}
+            L['title_y'] = ct + 14
+            L['track'] = pygame.Rect(self.x + 28, ct + 14 + ls + 20, self.width - 56, 8)
+            L['labels_y'] = L['track'].bottom + 12
+            L['input_label_y'] = L['labels_y'] + ls + 10
+            L['field'] = pygame.Rect(self.x + 16, L['input_label_y'] + ls + 4, self.width - 32 - 88, fh)
+            L['use'] = pygame.Rect(L['field'].right + 8, L['field'].top, 80, fh)
+            L['msg_y'] = L['field'].bottom + 6
+            return L
+
+        # ---- text size slider
+        def slide_to(self, mouse_x):
+            track = self.font_layout()['track']
+            n = len(FONT_STOPS)
+            idx = round((mouse_x - track.left) / track.width * (n - 1))
+            idx = max(0, min(n - 1, idx))
+            v = FONT_STOPS[idx]
+            self.main.set_font_scale(v)
+            self.size_text = f'{v:g}'
+            self.message = ''
+
+        def apply_size_text(self):
+            v = parse_scale(self.size_text)
+            if v is None:
+                self.message = f'Skriv et tall mellom {SCALE_MIN:g} og {SCALE_MAX:g}.'
+                self.message_kind = 'err'
+                return
+            self.main.set_font_scale(v)
+            self.size_text = f'{v:g}'
+            self.message = f'Størrelsen er satt til {v:g}.'
+            self.message_kind = 'ok'
 
         # ---- password form
         def submit(self):
@@ -1356,6 +1521,15 @@ class main:
                 self.message_kind = 'ok'
 
         def handle_event(self, event):
+            # dragging the slider
+            if self.view == 'font':
+                if event.type == pygame.MOUSEMOTION and self.slider_drag:
+                    self.slide_to(event.pos[0])
+                    return True
+                if event.type == pygame.MOUSEBUTTONUP and event.button == 1 and self.slider_drag:
+                    self.slider_drag = False
+                    return True
+
             used = super().handle_event(event)
             if used and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not self.closed:
                 pos = event.pos
@@ -1367,11 +1541,24 @@ class main:
                             else:
                                 self.set_view('password' if i == 0 else 'font')
                 elif self.view == 'font':
-                    for i, (name, scale) in enumerate(FONT_SCALES):
-                        if self.font_rect(i).collidepoint(pos):
-                            self.main.set_font_scale(scale)
+                    L = self.font_layout()
+                    if L['track'].inflate(24, 28).collidepoint(pos):
+                        self.slider_drag = True
+                        self.size_focus = False
+                        self.slide_to(pos[0])
+                    elif L['field'].collidepoint(pos):
+                        self.size_focus = True
+                    else:
+                        self.size_focus = False
+                    if L['use'].collidepoint(pos):
+                        self.apply_size_text()
                     if self.back_rect().collidepoint(pos):
                         self.set_view('menu')
+                    elif self.save_rect().collidepoint(pos):          # "Nullstill"
+                        self.main.set_font_scale(1.0)
+                        self.size_text = '1'
+                        self.message = 'Størrelsen er satt til 1.'
+                        self.message_kind = 'ok'
                 else:
                     for i in range(4):
                         if self.field_rect(i).collidepoint(pos):
@@ -1381,33 +1568,42 @@ class main:
                     elif self.back_rect().collidepoint(pos):
                         self.set_view('menu')
 
-            elif event.type == pygame.KEYDOWN and self.view == 'password' and self.main.open_windows \
+            elif event.type == pygame.KEYDOWN and self.main.open_windows \
                     and self.main.open_windows[-1] is self:          # only the top window gets typing
-                f = self.focus
-                if event.key == pygame.K_TAB:
-                    self.focus = (f + 1) % 4
-                elif event.key == pygame.K_RETURN:
-                    if f < 3:
-                        self.focus += 1
-                    else:
-                        self.submit()
-                elif event.key == pygame.K_BACKSPACE:
-                    self.fields[f] = self.fields[f][:-1]
-                elif event.unicode and event.unicode.isprintable() \
-                        and len(self.fields[f]) < (16 if f == 1 else 24):
-                    self.fields[f] += event.unicode
-                return True
+                if self.view == 'password':
+                    f = self.focus
+                    if event.key == pygame.K_TAB:
+                        self.focus = (f + 1) % 4
+                    elif event.key == pygame.K_RETURN:
+                        if f < 3:
+                            self.focus += 1
+                        else:
+                            self.submit()
+                    elif event.key == pygame.K_BACKSPACE:
+                        self.fields[f] = self.fields[f][:-1]
+                    elif event.unicode and event.unicode.isprintable() \
+                            and len(self.fields[f]) < (16 if f == 1 else 24):
+                        self.fields[f] += event.unicode
+                    return True
+                if self.view == 'font' and self.size_focus:
+                    if event.key == pygame.K_RETURN:
+                        self.apply_size_text()
+                    elif event.key == pygame.K_BACKSPACE:
+                        self.size_text = self.size_text[:-1]
+                    elif event.unicode and event.unicode in '0123456789.,' and len(self.size_text) < 7:
+                        self.size_text += event.unicode        # any number can be typed, not just the slider stops
+                    return True
             return used
 
         def draw_button(self, rect, text, colour=(60, 130, 220)):
             pygame.draw.rect(self.main.screen, colour, rect, border_radius=4)
-            label = self.main.small_font.render(text, True, (255, 255, 255))
+            label = self.main.ui_font.render(text, True, (255, 255, 255))
             self.main.screen.blit(label, label.get_rect(center=rect.center))
 
         def draw_content(self):
             screen = self.main.screen
-            font = self.main.small_font
-            bold = self.main.bold_font
+            font = self.main.ui_font
+            bold = self.main.ui_bold
             ls, fh = self.metrics()
             screen.set_clip(self.get_area_rect())
 
@@ -1422,25 +1618,48 @@ class main:
                     pygame.draw.rect(screen, (222, 222, 222) if locked else (205, 225, 255), r, border_radius=8)
                     pygame.draw.rect(screen, (150, 150, 150) if locked else (60, 130, 220), r, 2, border_radius=8)
                     screen.blit(bold.render(title, True, (120, 120, 120) if locked else (0, 40, 120)), (r.left + 12, r.top + 8))
-                    hint = self.main.fit_text(hint, r.width - 24 - (30 if locked else 0))
+                    hint = self.main.fit_text(hint, r.width - 24 - (30 if locked else 0), font)
                     screen.blit(font.render(hint, True, (120, 120, 120) if locked else (60, 60, 60)), (r.left + 12, r.top + 8 + ls + 4))
                     if locked:
                         self.main.draw_lock(screen, r.right - 32, r.centery - 4)
 
             elif self.view == 'font':
-                screen.blit(bold.render('Velg tekststørrelse', True, (0, 40, 120)), (self.x + 16, self.content_top() + 16))
-                for i, (name, scale) in enumerate(FONT_SCALES):
-                    r = self.font_rect(i)
-                    chosen = abs(scale - self.main.font_scale) < 0.01
-                    pygame.draw.rect(screen, (60, 130, 220) if chosen else (255, 255, 255), r, border_radius=6)
-                    pygame.draw.rect(screen, (60, 130, 220), r, 2, border_radius=6)
-                    label = font.render(name + ('  (valgt)' if chosen else ''), True, (255, 255, 255) if chosen else (0, 0, 0))
-                    screen.blit(label, label.get_rect(midleft=(r.left + 12, r.centery)))
-                y = self.content_top() + 16 + ls + 8 + len(FONT_SCALES) * (fh + 10) + 6
-                for line in self.main.wrap_text('Slik ser teksten ut med denne størrelsen.', self.width - 32):
-                    screen.blit(font.render(line, True, (60, 60, 60)), (self.x + 16, y))
-                    y += ls
+                L = self.font_layout()
+                screen.blit(bold.render(f'Skriftstørrelse: x{self.main.font_scale:g}', True, (0, 40, 120)), (self.x + 16, L['title_y']))
+
+                # slider: ticks at 0.1 ... 1.0, then 2 ... 10. The knob can also sit between two ticks (a typed value like 5.2)
+                track = L['track']
+                n = len(FONT_STOPS)
+                knob_x = track.left + int(track.width * scale_to_pos(self.main.font_scale))
+                pygame.draw.rect(screen, (200, 200, 200), track, border_radius=4)
+                pygame.draw.rect(screen, (60, 130, 220), (track.left, track.top, knob_x - track.left, track.height), border_radius=4)
+                for i in range(n):
+                    tx = track.left + int(track.width * i / (n - 1))
+                    pygame.draw.line(screen, (110, 110, 110), (tx, track.bottom + 2), (tx, track.bottom + 6))
+                for i in (0, 9, 13, 18):
+                    tx = track.left + int(track.width * i / (n - 1))
+                    label = font.render(f'{FONT_STOPS[i]:g}', True, (70, 70, 70))
+                    screen.blit(label, label.get_rect(midtop=(tx, L['labels_y'])))
+                pygame.draw.circle(screen, (255, 255, 255), (knob_x, track.centery), 10)
+                pygame.draw.circle(screen, (60, 130, 220), (knob_x, track.centery), 10, 2)
+
+                # text box: any number from 0.1 to 10
+                screen.blit(font.render(f'Skriv inn selv ({SCALE_MIN:g} - {SCALE_MAX:g}):', True, (0, 0, 0)), (self.x + 16, L['input_label_y']))
+                field = L['field']
+                pygame.draw.rect(screen, (255, 255, 255), field)
+                pygame.draw.rect(screen, (51, 153, 255) if self.size_focus else (130, 130, 130), field, 2)
+                surf = font.render(self.size_text, True, (0, 0, 0))
+                screen.blit(surf, (field.left + 6, field.centery - surf.get_height() // 2))
+                if self.size_focus and (pygame.time.get_ticks() // 500) % 2 == 0:
+                    cx = field.left + 6 + surf.get_width() + 1
+                    pygame.draw.line(screen, (0, 0, 0), (cx, field.top + 5), (cx, field.bottom - 5))
+                self.draw_button(L['use'], 'Bruk')
+
+                if self.message:
+                    colour = {'ok': (30, 140, 50), 'warn': (210, 120, 20), 'err': (200, 50, 50)}[self.message_kind]
+                    screen.blit(font.render(self.message, True, colour), (self.x + 16, L['msg_y']))
                 self.draw_button(self.back_rect(), 'Tilbake', (110, 110, 110))
+                self.draw_button(self.save_rect(), 'Nullstill')
 
             else:
                 for i in range(4):
@@ -1465,7 +1684,7 @@ class main:
                 if self.message:
                     colour = {'ok': (30, 140, 50), 'warn': (210, 120, 20), 'err': (200, 50, 50)}[self.message_kind]
                     y = self.field_rect(3).bottom + 8
-                    for line in self.main.wrap_text(self.message, self.width - 30)[:3]:
+                    for line in self.main.wrap_text(self.message, self.width - 30, font)[:3]:
                         msg = font.render(line, True, colour)
                         screen.blit(msg, msg.get_rect(midtop=(self.x + self.width // 2, y)))
                         y += ls
@@ -1508,7 +1727,7 @@ class main:
             screen = self.main.screen
             font = self.main.small_font
             bold = self.main.bold_font
-            ui = self.main.ui
+            step = self.main.line_step
             area = self.get_area()
 
             screen.set_clip(area)
@@ -1521,33 +1740,34 @@ class main:
             text_w = area.width - 32 - 30 - 14
             y = area.top + 12 - self.scroll
 
-            screen.blit(self.main.font.render('Oppsummering', True, (0, 60, 160)), (x, y))
-            y += ui(32)
+            title = self.main.font.render('Oppsummering', True, (0, 60, 160))
+            screen.blit(title, (x, y))
+            y += max(step(32), title.get_height() + 4)
             score = f'Du gjorde {self.ok_count} av {self.total} ting riktig.'
             screen.blit(font.render(score, True, (40, 40, 40)), (x, y))
-            y += ui(30)
+            y += step(30)
 
             for item in self.items:
                 self.main.draw_status_icon(screen, x + 10, y + 9, item['ok'])
                 screen.blit(bold.render(item['title'], True, (20, 20, 20)), (x + 30, y))
-                y += ui(20)
+                y += step(20)
                 for line in self.main.wrap_text(item['text'], text_w):
                     screen.blit(font.render(line, True, (60, 60, 60)), (x + 30, y))
-                    y += ui(18)
+                    y += step(18)
                 y += 12
 
             # rules to remember
             rule_lines = [self.main.wrap_text(f'{n}. {r}', text_w) for n, r in enumerate(SUMMARY_RULES, start=1)]
-            box_h = ui(34) + sum(len(l) * ui(18) + 6 for l in rule_lines)
+            box_h = step(34) + sum(len(l) * step(18) + 6 for l in rule_lines)
             box = pygame.Rect(x, y, area.width - 32 - 14, box_h)
             pygame.draw.rect(screen, (255, 241, 150), box, border_radius=6)
             pygame.draw.rect(screen, (235, 210, 90), box, 1, border_radius=6)
             screen.blit(bold.render('3 regler å huske', True, (90, 70, 0)), (box.left + 10, box.top + 8))
-            ty = box.top + ui(30)
+            ty = box.top + step(30)
             for lines in rule_lines:
                 for line in lines:
                     screen.blit(font.render(line, True, (60, 45, 0)), (box.left + 10, ty))
-                    ty += ui(18)
+                    ty += step(18)
                 ty += 6
             y = box.bottom + 16
 
@@ -1593,9 +1813,16 @@ class main:
         self.unlocked = set(flags.get('unlocked', []))        # names of icons that have been unlocked
         self.summary_shown = flags.get('summary_shown', False)
 
-        # text size setting
-        self.font_scale = flags.get('font_scale', 1.0)
+        # text size setting (anything from SCALE_MIN to SCALE_MAX)
+        try:
+            self.font_scale = min(max(float(flags.get('font_scale', 1.0)), SCALE_MIN), SCALE_MAX)
+        except (TypeError, ValueError):
+            self.font_scale = 1.0
         self.make_fonts()
+        # the settings window always uses these, so it stays readable whatever the text size is
+        self.ui_font = pygame.font.Font(None, 22)
+        self.ui_bold = pygame.font.Font(None, 22)
+        self.ui_bold.set_bold(True)
 
         self.bk = self.asset_path + 'windows-xp-desktop.png'
         self.bk = pygame.image.load(self.bk).convert_alpha()
@@ -1620,6 +1847,7 @@ class main:
 
         self.notified = False
         self.inbox = []
+        self.scheduled = []                          # messages friends are about to send (like Filip's "Hei!")
 
         self.friend_list = []
         self.friend_list.insert(0, {'sender': ' ', 'accepted': False, 'read': True, 'ignor': True, 'next': -1})
@@ -1659,25 +1887,30 @@ class main:
     # ------------------------------------------------------------------ fonts / sizes
     def make_fonts(self):
         s = self.font_scale
-        self.font = pygame.font.Font(None, round(30 * s))
-        self.small_font = pygame.font.Font(None, round(22 * s))
-        self.smallest_font = pygame.font.Font(None, round(15 * s))
-        self.bold_font = pygame.font.Font(None, round(22 * s))
+        self.font = pygame.font.Font(None, max(5, round(30 * s)))
+        self.small_font = pygame.font.Font(None, max(5, round(22 * s)))
+        self.smallest_font = pygame.font.Font(None, max(5, round(15 * s)))
+        self.bold_font = pygame.font.Font(None, max(5, round(22 * s)))
         self.bold_font.set_bold(True)
         self.title_font = pygame.font.Font(None, 30)         # window titles keep their size (the bar is fixed)
 
     def ui(self, n):
-        """Scales a number (a row height, an offset, ...) with the text size setting."""
-        return int(round(n * self.font_scale))
+        """Scales a layout number (a row height, an offset, ...) with the text size.
+        Capped between 0.5 and 2 so the windows stay usable even when the text size is 0.1 or 10."""
+        return int(round(n * min(max(self.font_scale, 0.5), 2.0)))
+
+    def line_step(self, base=22):
+        """Distance between two lines of text: never less than the real height of the text."""
+        return max(self.ui(base), self.small_font.get_linesize() + 4)
 
     def set_font_scale(self, scale):
-        self.font_scale = scale
+        self.font_scale = min(max(float(scale), SCALE_MIN), SCALE_MAX)
         self.make_fonts()
         for s in self.desktop_shortcuts:
             s.set_name(s.name)                               # draw the labels again with the new font
         for w in self.open_windows:
             w.on_font_change()
-        self.update_save(font_scale=scale)
+        self.update_save(font_scale=self.font_scale)
 
     def new_window_id(self):
         self.window_counter += 1
@@ -1737,8 +1970,8 @@ class main:
              'check': lambda: s.get('bought', False)},
             {'id': 'planets100', 'text': 'Få 100 planeter',
              'check': lambda: s.get('max_planets', 0) >= 100},
-            {'id': 'report', 'text': 'Bruk Rapporter-knappen på noe som virker feil',
-             'check': lambda: s.get('reported_any', False)},
+            #{'id': 'report', 'text': 'Bruk Rapporter-knappen på noe som virker feil',
+            # 'check': lambda: s.get('reported_any', False)},
             {'id': 'password', 'text': 'Bytt passordet ditt i Innstillinger',
              'check': lambda: s.get('fixed', False),
              'applies': lambda: s.get('warned', False)},
@@ -1791,6 +2024,16 @@ class main:
 
     def open_message(self, title, text):
         self.open_windows.append(self.message_window(self, title, text))
+
+    def mistake(self, text, title='Oops!'):
+        """The player did something risky. Counts it, and shows a popup when SHOW_MISTAKE_POPUPS is True."""
+        self.stats['mistakes'] = self.stats.get('mistakes', 0) + 1
+        if not SHOW_MISTAKE_POPUPS:
+            return
+        for w in self.open_windows:                   # don't open the same popup twice
+            if isinstance(w, self.message_window) and w.text == text:
+                return
+        self.open_message(title, text)
 
     def open_summary(self):
         for w in self.open_windows:
@@ -1855,7 +2098,7 @@ class main:
             ok, text = feedback[self.friend_status(name)]
             add(ok, name, text)
 
-        # what you answered with the reply buttons
+        # what you wrote to them (flagged by key words, or by the reply buttons)
         replies = s.get('replies', {})
         for name in self.message_script:
             given = replies.get(name, [])
@@ -1864,10 +2107,10 @@ class main:
             bad = list(dict.fromkeys(r['tag'] for r in given if not r['safe']))
             if bad:
                 sentences = ' '.join(REPLY_FEEDBACK[t] for t in bad if t in REPLY_FEEDBACK)
-                add(False, f'Svarene dine til {name}',
+                add(False, f'Det du skrev til {name}',
                     sentences + ' Husk: del aldri personlig info med folk du ikke kjenner, og si fra til en voksen når noe føles feil.')
             else:
-                add(True, f'Svarene dine til {name}', 'Du svarte trygt og sa nei til det som føltes feil. Bra!')
+                add(True, f'Det du skrev til {name}', 'Du svarte trygt og sa nei til det som føltes feil. Bra!')
 
         if s.get('false_reports', 0) > 0:
             add(None, 'Rapportering',
@@ -1888,13 +2131,39 @@ class main:
             return 'denied'
         return 'accepted' if friend['accepted'] else 'pending'
 
+    # ------------------------------------------------------------------ what the player writes to friends
     def record_reply(self, name, opt):
-        """Called when the player presses a reply button."""
+        """Called when the player presses a reply button, or when a typed message is flagged."""
         given = self.stats.setdefault('replies', {}).setdefault(name, [])
         given.append({'tag': opt.get('tag', 'ok'), 'safe': opt.get('safe', True)})
         if opt.get('leak'):
-            self.register_leak(name)
+            self.register_leak(name)                 # that shows its own popup
+        elif not opt.get('safe', True) and opt.get('tag') in REPLY_FEEDBACK:
+            self.mistake(REPLY_FEEDBACK[opt['tag']] +
+                         ' Del aldri slikt med folk du ikke kjenner, og si fra til en voksen hvis noe føles feil.')
         self.save_progress()
+
+    def handle_player_message(self, name, text):
+        """Everything that happens when the player has typed a message to a friend."""
+        leaked = self.check_password_leak(text, name)
+        for tag in find_flags(text):
+            if leaked and tag == 'password_word':    # the leak popup already says it
+                continue
+            self.record_reply(name, {'tag': tag, 'safe': False})
+        for pattern, answer in AUTO_REPLIES.get(name, []):
+            if re.search(pattern, text.lower()):
+                self.schedule_message(name, answer, 1200)
+                break
+
+    def schedule_message(self, sender, text, delay_ms):
+        self.scheduled.append({'due': pygame.time.get_ticks() + delay_ms, 'sender': sender, 'text': text})
+
+    def process_scheduled(self):
+        now = pygame.time.get_ticks()
+        for item in self.scheduled[:]:
+            if now >= item['due']:
+                self.scheduled.remove(item)
+                self.Send_message(item['sender'], item['text'])     # dropped if the friend is no longer accepted
 
     def draw_status_icon(self, screen, cx, cy, ok):
         colour = (40, 160, 70) if ok is True else (200, 60, 50) if ok is False else (150, 150, 150)
@@ -1916,7 +2185,7 @@ class main:
         if pending:
             blocks = [self.wrap_text(m['text'], w - 44) for m in pending]
         else:
-            blocks = [self.wrap_text('Alt er gjort! Åpne Oppsummering på skrivebordet.', w - 24)]
+            blocks = [self.wrap_text('Alt er gjort!', w - 24)]
         h = 40 + sum(len(b) * step + 10 for b in blocks)
         rect = pygame.Rect(self.width - w - 10, 10, w, h)
 
@@ -2060,9 +2329,11 @@ class main:
     # ------------------------------------------------------------------ scam / reporting
     def scam_clicked(self):
         self.stats['scam_clicked'] = True
+        self.stats['mistakes'] = self.stats.get('mistakes', 0) + 1
         self.save_progress()
         self.mark_unsafe('scam')
-        self.open_windows.append(self.scam_popup(self))
+        if SHOW_MISTAKE_POPUPS:
+            self.open_windows.append(self.scam_popup(self))
 
     def report_mail(self, mail):
         if mail.get('reported'):
@@ -2223,6 +2494,7 @@ class main:
         self.delete_confirm_until = 0
         self.mouse = pygame.SYSTEM_CURSOR_ARROW
         self.toasts.clear()
+        self.scheduled.clear()
         try:
             pygame.mouse.set_cursor(self.mouse)  # in case a resize cursor was showing
         except Exception:
@@ -2238,7 +2510,7 @@ class main:
             if name in denied:
                 self.friend_list.remove(friend)          # you denied or reported them last time
             elif name in saved:
-                friend.update(saved[name])               # accepted (or chat log), read, next
+                friend.update(saved[name])               # accepted (or chat log), read, next, replied_to
 
     def Friend_request(self, sender='Unknown'):
         self.friend_list.insert(1, {'sender': sender, 'accepted': False, 'read': False, 'ignor': False, 'next': 0})
@@ -2318,22 +2590,31 @@ class main:
             self.stats['leaked_to'] = friend
         self.save_progress()
         self.mark_unsafe('leak')
+        who = f' til {friend}' if friend else ''
+        self.mistake(f'Du sendte passordet ditt{who}! Passord er hemmelige og skal aldri deles, heller ikke med venner. '
+                     'Bytt passordet ditt så snart du kan.', 'Passordet er delt!')
 
     def check_password_leak(self, text, friend=None):
+        """Returns True if the text contained the player's password."""
         user = self.logged_in
         if not user or self.stats.get('password_leaked'):
-            return
+            return False
         # the whole message, plus each word with punctuation stripped (every check is a slow hash)
         words = {w.strip('.,!?;:"\'()') for w in text.split()}
         words.add(text.strip())
         for c in [w for w in words if 4 <= len(w) <= 24][:8]:
             if self.check_password(user, c):
                 self.register_leak(friend)
-                return
+                return True
+        return False
 
     def is_unsafe_password(self, pw, username=''):
         p = pw.lower()
         return p in UNSAFE_PASSWORDS or (bool(username) and p == username.lower()) or len(set(p)) == 1
+
+    def weak_password_mistake(self):
+        self.mistake('Passordet ditt står på listen over passord som er lette å gjette. '
+                     'Velg et passord som er lengre, og bland bokstaver og tall.', 'Svakt passord')
 
     # ------------------------------------------------------------------ accounts / saving
     def hash_password(self, password, salt):
@@ -2388,6 +2669,7 @@ class main:
             if self.is_unsafe_password(new_pw, name):
                 self.stats['weak_password'] = True
                 self.mark_unsafe('weak')
+                self.weak_password_mistake()
                 result = 'weak'
             elif self.unsafe or self.stats.get('warned'):
                 self.stats['fixed'] = True
@@ -2424,6 +2706,7 @@ class main:
                 self.stats['weak_password'] = True
                 self.mark_unsafe('weak')
                 self.save_progress()
+                self.weak_password_mistake()         # the popup shows up on the desktop after login
             self.login_user = name
             self.logged_in = name
             self.login_error = ''
@@ -2460,6 +2743,7 @@ class main:
         self.unsafe_reason = 'scam'
         self.warning_sent = False
         self.toasts.clear()
+        self.scheduled.clear()
         self.open_windows.clear()
         self.inbox = []
         self.friend_list = [{'sender': ' ', 'accepted': False, 'read': True, 'ignor': True, 'next': -1}]
@@ -2477,6 +2761,9 @@ class main:
 
     # ------------------------------------------------------------------ small helpers
     def short_number(self, n):
+        """1.5K, 2.0M, 3.2B. From 1T and up it switches to scientific notation (1.50e12)."""
+        if n >= 10**12:
+            return f"{n:.2e}".replace('e+', 'e')
         n = int(n)
         for limit, suffix in ((10**9, 'B'), (10**6, 'M'), (10**3, 'K')):
             if n >= limit:
@@ -2499,10 +2786,11 @@ class main:
             lines.append(line)
         return lines
 
-    def fit_text(self, text, max_width):
-        if self.small_font.size(text)[0] <= max_width:
+    def fit_text(self, text, max_width, font=None):
+        font = font or self.small_font
+        if font.size(text)[0] <= max_width:
             return text
-        while text and self.small_font.size(text + '...')[0] > max_width:
+        while text and font.size(text + '...')[0] > max_width:
             text = text[:-1]
         return text + '...'
 
@@ -2741,6 +3029,8 @@ class main:
                         self.running = False
                     elif event.key == pygame.K_F9 and self.logged_in:
                         self.open_summary()             # for testing: shows the summary at any time
+                    elif event.key == pygame.K_F10:
+                        self.set_font_scale(1.0)        # emergency button: back to the normal text size
 
                 if self.logged_in:
                     self.handle_mouse_events(event)
@@ -2760,6 +3050,7 @@ class main:
             self.email_shortcut.attention = self.notified and (win is None or win.closed)   # the E-post icon bounces for unread mail
             self.update_missions()
             self.update_unlocks()
+            self.process_scheduled()
 
             for i in self.desktop_shortcuts:
                 if i.count_down > 0:
